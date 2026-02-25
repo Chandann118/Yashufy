@@ -1,9 +1,9 @@
 import React, { useState } from 'react';
-import { View, Text, TextInput, TouchableOpacity, Alert, ScrollView } from 'react-native';
+import { View, Text, TextInput, Pressable, Alert, ScrollView, StyleSheet } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useDispatch, useSelector } from 'react-redux';
 import { setBackendUrl, setDiscoveryUrl } from '../store/settingsSlice';
-import { Settings, Globe, Save, Zap } from 'lucide-react-native';
+import { Settings, Globe, Save, Zap, ChevronDown, ChevronUp } from 'lucide-react-native';
 
 export default function ProfileScreen() {
     const settings = useSelector(state => state.settings);
@@ -15,7 +15,7 @@ export default function ProfileScreen() {
 
     const handleSave = () => {
         if (!url.startsWith('http')) {
-            Alert.alert('Invalid URL', 'Please enter a valid URL starting with http:// or https://');
+            Alert.alert('Invalid URL', 'Please enter a URL starting with http:// or https://');
             return;
         }
         dispatch(setBackendUrl(url));
@@ -24,7 +24,7 @@ export default function ProfileScreen() {
 
     const handleSaveDiscovery = () => {
         if (discoveryUrl && !discoveryUrl.startsWith('http')) {
-            Alert.alert('Invalid URL', 'Please enter a valid URL for the Discovery Service');
+            Alert.alert('Invalid URL', 'Please enter a valid URL for Discovery');
             return;
         }
         dispatch(setDiscoveryUrl(discoveryUrl));
@@ -44,121 +44,313 @@ export default function ProfileScreen() {
             if (latestUrl.startsWith('http')) {
                 dispatch(setBackendUrl(latestUrl));
                 setUrl(latestUrl);
-                Alert.alert('Synced!', `Backend URL updated to: ${latestUrl}`);
+                Alert.alert('Synced!', `Updated to: ${latestUrl}`);
             } else {
-                Alert.alert('Error', 'The discovery file does not contain a valid URL.');
+                Alert.alert('Error', 'Invalid URL in discovery file.');
             }
         } catch (error) {
-            Alert.alert('Sync Failed', 'Could not reach the discovery server.');
+            Alert.alert('Sync Failed', 'Could not reach discovery server.');
         } finally {
             setSyncing(false);
         }
     };
 
     return (
-        <SafeAreaView className="flex-1 bg-vortex-obsidian">
-            <ScrollView className="px-6 mt-10" showsVerticalScrollIndicator={false}>
-                <View className="flex-row items-center mb-8">
-                    <View className="w-16 h-16 bg-vortex-saffron/20 rounded-full items-center justify-center border border-vortex-saffron/30">
+        <SafeAreaView style={styles.container}>
+            <ScrollView
+                contentContainerStyle={styles.scrollContent}
+                showsVerticalScrollIndicator={false}
+            >
+                {/* Header */}
+                <View style={styles.header}>
+                    <View style={styles.headerIconContainer}>
                         <Settings size={32} color="#FF9933" />
                     </View>
-                    <View className="ml-4">
-                        <Text className="text-white text-3xl font-extrabold">Settings</Text>
-                        <Text className="text-vortex-textSecondary text-sm">Configure your experience</Text>
+                    <View style={styles.headerTextContainer}>
+                        <Text style={styles.headerTitle}>Settings</Text>
+                        <Text style={styles.headerSubtitle}>App & Connection</Text>
                     </View>
                 </View>
 
-                {/* Main App Settings */}
-                <View className="bg-vortex-surface p-6 rounded-2xl border border-white/5 mb-6">
-                    <Text className="text-white text-lg font-bold mb-4">App Settings</Text>
+                {/* Main Settings Card */}
+                <View style={styles.card}>
+                    <Text style={styles.cardTitle}>App Preferences</Text>
 
-                    <View className="flex-row justify-between items-center py-3 border-b border-white/5">
-                        <Text className="text-white">Audio Quality</Text>
-                        <Text className="text-vortex-saffron">High (320kbps)</Text>
+                    <View style={styles.settingRow}>
+                        <Text style={styles.settingLabel}>Audio Quality</Text>
+                        <Text style={styles.settingValue}>High (320kbps)</Text>
                     </View>
 
-                    <View className="flex-row justify-between items-center py-3 border-b border-white/5">
-                        <Text className="text-white">Dark Mode</Text>
-                        <View className="w-10 h-5 bg-vortex-saffron rounded-full" />
+                    <View style={styles.settingRow}>
+                        <Text style={styles.settingLabel}>Production Mode</Text>
+                        <View style={styles.toggleActive} />
                     </View>
 
-                    <TouchableOpacity
-                        className="mt-6 py-4 bg-white/5 rounded-xl border border-white/10 items-center justify-center"
-                        onPress={() => {
-                            console.log('Toggling advanced settings');
-                            setShowAdvanced(!showAdvanced);
-                        }}
+                    {/* Advanced Toggle Button */}
+                    <Pressable
+                        style={({ pressed }) => [
+                            styles.advancedToggle,
+                            { opacity: pressed ? 0.7 : 1 }
+                        ]}
+                        onPress={() => setShowAdvanced(!showAdvanced)}
+                        hitSlop={20}
                     >
-                        <Text className="text-vortex-textSecondary text-sm font-medium">
+                        <Text style={styles.advancedToggleText}>
                             {showAdvanced ? "Hide Developer Settings" : "Advanced Connection Settings"}
                         </Text>
-                    </TouchableOpacity>
+                        {showAdvanced ? <ChevronUp size={16} color="#666" /> : <ChevronDown size={16} color="#666" />}
+                    </Pressable>
                 </View>
 
                 {showAdvanced && (
                     <>
-                        {/* Discovery Mode */}
-                        <View className="bg-vortex-surface p-6 rounded-2xl border border-vortex-saffron/30 mb-6">
-                            <View className="flex-row items-center mb-4">
+                        {/* Auto-Discovery Card */}
+                        <View style={[styles.card, styles.advancedCard]}>
+                            <View style={styles.cardHeader}>
                                 <Zap size={20} color="#FF9933" />
-                                <Text className="text-white text-lg font-semibold ml-2">Developer Discovery</Text>
+                                <Text style={styles.cardSectionTitle}>Auto-Discovery (Recommended)</Text>
                             </View>
+                            <Text style={styles.description}>For automated updates for you and your friends.</Text>
+
                             <TextInput
-                                className="bg-vortex-obsidian text-white p-4 rounded-xl border border-[#333] focus:border-vortex-saffron mb-4"
+                                style={styles.input}
                                 placeholder="Gist Raw URL"
                                 placeholderTextColor="#666"
                                 value={discoveryUrl}
                                 onChangeText={setDiscoveryUrlLocal}
                                 autoCapitalize="none"
                             />
-                            <View className="flex-row justify-between">
-                                <TouchableOpacity
-                                    className="bg-[#333] p-3 rounded-xl flex-1 mr-2 items-center"
+
+                            <View style={styles.buttonRow}>
+                                <Pressable
+                                    style={({ pressed }) => [styles.secondaryButton, { opacity: pressed ? 0.7 : 1 }]}
                                     onPress={handleSaveDiscovery}
+                                    hitSlop={10}
                                 >
-                                    <Text className="text-white font-bold">Save</Text>
-                                </TouchableOpacity>
-                                <TouchableOpacity
-                                    className="bg-vortex-saffron p-3 rounded-xl flex-1 ml-2 items-center"
+                                    <Text style={styles.secondaryButtonText}>Save Link</Text>
+                                </Pressable>
+                                <Pressable
+                                    style={({ pressed }) => [styles.primaryButton, { opacity: pressed ? 0.7 : 1 }]}
                                     onPress={handleSync}
                                     disabled={syncing}
+                                    hitSlop={10}
                                 >
-                                    <Text className="text-black font-bold">{syncing ? 'Syncing...' : 'Sync Now'}</Text>
-                                </TouchableOpacity>
+                                    <Text style={styles.primaryButtonText}>{syncing ? 'Syncing...' : 'Sync Now'}</Text>
+                                </Pressable>
                             </View>
                         </View>
 
-                        {/* Manual Connection */}
-                        <View className="bg-vortex-surface p-6 rounded-2xl border border-white/5 mb-10">
-                            <View className="flex-row items-center mb-4">
+                        {/* Manual Connection Card */}
+                        <View style={styles.card}>
+                            <View style={styles.cardHeader}>
                                 <Globe size={20} color="#FF9933" />
-                                <Text className="text-white text-lg font-semibold ml-2">Manual Server URL</Text>
+                                <Text style={styles.cardSectionTitle}>Manual Server URL</Text>
                             </View>
 
                             <TextInput
-                                className="bg-vortex-obsidian text-white p-4 rounded-xl border border-[#333] focus:border-vortex-saffron"
+                                style={styles.input}
                                 value={url}
                                 onChangeText={setUrl}
                                 autoCapitalize="none"
                                 autoCorrect={false}
                             />
 
-                            <TouchableOpacity
-                                className="bg-[#222] mt-4 p-4 rounded-xl flex-row justify-center items-center border border-[#333]"
+                            <Pressable
+                                style={({ pressed }) => [styles.saveButton, { opacity: pressed ? 0.7 : 1 }]}
                                 onPress={handleSave}
+                                hitSlop={10}
                             >
-                                <Save size={20} color="#FF9933" />
-                                <Text className="text-white font-bold text-lg ml-2">Save Server</Text>
-                            </TouchableOpacity>
+                                <Save size={20} color="black" />
+                                <Text style={styles.saveButtonText}>Apply URL Manually</Text>
+                            </Pressable>
                         </View>
                     </>
                 )}
 
-                <View className="mt-10 items-center">
-                    <Text className="text-vortex-textSecondary text-xs">Vortex Music v1.0.0 (Production)</Text>
-                    <Text className="text-vortex-textSecondary text-xs mt-1">Built by Antigravity AI</Text>
+                <View style={styles.footer}>
+                    <Text style={styles.footerText}>Vortex Music v1.0.0 (Production)</Text>
+                    <Text style={styles.footerTextSub}>Built by Antigravity AI</Text>
                 </View>
+                <View style={{ height: 100 }} />
             </ScrollView>
         </SafeAreaView>
     );
 }
+
+const styles = StyleSheet.create({
+    container: {
+        flex: 1,
+        backgroundColor: '#050505',
+    },
+    scrollContent: {
+        paddingHorizontal: 24,
+        paddingTop: 40,
+        flexGrow: 1,
+    },
+    header: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        marginBottom: 32,
+    },
+    headerIconContainer: {
+        width: 64,
+        height: 64,
+        backgroundColor: 'rgba(255, 153, 51, 0.15)',
+        borderRadius: 32,
+        alignItems: 'center',
+        justifyContent: 'center',
+        borderWidth: 1,
+        borderColor: 'rgba(255, 153, 51, 0.2)',
+    },
+    headerTextContainer: {
+        marginLeft: 16,
+    },
+    headerTitle: {
+        color: '#FFFFFF',
+        fontSize: 32,
+        fontWeight: '900',
+    },
+    headerSubtitle: {
+        color: '#A0A0A0',
+        fontSize: 14,
+    },
+    card: {
+        backgroundColor: '#111',
+        padding: 24,
+        borderRadius: 20,
+        borderWidth: 1,
+        borderColor: 'rgba(255,255,255,0.05)',
+        marginBottom: 20,
+    },
+    advancedCard: {
+        borderColor: 'rgba(255, 153, 51, 0.3)',
+    },
+    cardTitle: {
+        color: '#FFFFFF',
+        fontSize: 18,
+        fontWeight: 'bold',
+        marginBottom: 20,
+    },
+    cardHeader: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        marginBottom: 8,
+    },
+    cardSectionTitle: {
+        color: '#FFFFFF',
+        fontSize: 18,
+        fontWeight: 'bold',
+        marginLeft: 10,
+    },
+    description: {
+        color: '#A0A0A0',
+        fontSize: 12,
+        marginBottom: 16,
+    },
+    settingRow: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        paddingVertical: 14,
+        borderBottomWidth: 1,
+        borderBottomColor: 'rgba(255,255,255,0.05)',
+    },
+    settingLabel: {
+        color: '#FFFFFF',
+        fontSize: 16,
+    },
+    settingValue: {
+        color: '#FF9933',
+        fontWeight: '500',
+    },
+    toggleActive: {
+        width: 44,
+        height: 22,
+        backgroundColor: '#FF9933',
+        borderRadius: 11,
+    },
+    advancedToggle: {
+        marginTop: 20,
+        paddingVertical: 16,
+        backgroundColor: 'rgba(255,255,255,0.03)',
+        borderRadius: 12,
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        borderWidth: 1,
+        borderColor: 'rgba(255,255,255,0.05)',
+    },
+    advancedToggleText: {
+        color: '#A0A0A0',
+        fontSize: 13,
+        fontWeight: '600',
+        marginRight: 8,
+    },
+    input: {
+        backgroundColor: '#050505',
+        color: '#FFFFFF',
+        padding: 16,
+        borderRadius: 12,
+        borderWidth: 1,
+        borderColor: '#333',
+        fontSize: 16,
+        marginBottom: 16,
+    },
+    buttonRow: {
+        flexDirection: 'row',
+    },
+    primaryButton: {
+        flex: 1,
+        backgroundColor: '#FF9933',
+        padding: 14,
+        borderRadius: 12,
+        alignItems: 'center',
+        marginLeft: 8,
+    },
+    primaryButtonText: {
+        color: '#000000',
+        fontWeight: 'bold',
+        fontSize: 16,
+    },
+    secondaryButton: {
+        flex: 1,
+        backgroundColor: '#222',
+        padding: 14,
+        borderRadius: 12,
+        alignItems: 'center',
+        marginRight: 8,
+    },
+    secondaryButtonText: {
+        color: '#FFFFFF',
+        fontWeight: 'bold',
+        fontSize: 16,
+    },
+    saveButton: {
+        backgroundColor: '#FF9933',
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: 16,
+        borderRadius: 12,
+        marginTop: 8,
+    },
+    saveButtonText: {
+        color: '#000000',
+        fontWeight: 'bold',
+        fontSize: 18,
+        marginLeft: 10,
+    },
+    footer: {
+        marginTop: 20,
+        alignItems: 'center',
+    },
+    footerText: {
+        color: '#666',
+        fontSize: 12,
+    },
+    footerTextSub: {
+        color: '#444',
+        fontSize: 11,
+        marginTop: 4,
+    }
+});

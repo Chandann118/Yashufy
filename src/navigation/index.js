@@ -2,7 +2,7 @@ import React from 'react';
 import { View } from 'react-native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createStackNavigator } from '@react-navigation/stack';
-import { Home, Search, Library, User } from 'lucide-react-native';
+import { Home, Search, Library, Settings } from 'lucide-react-native';
 
 // Screens
 import HomeScreen from '../screens/HomeScreen';
