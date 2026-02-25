@@ -16,7 +16,7 @@ app.add_middleware(
 
 @app.get("/health")
 async def health_check():
-    return {"status": "healthy", "ver": "v1.0.2-final-fix"}
+    return {"status": "healthy", "ver": "v1.0.3-invidious-primary"}
 
 @app.get("/version")
 async def get_version():
@@ -90,7 +90,36 @@ async def home_content():
 
 @app.get("/stream")
 async def get_stream(id: str = Query(...)):
-    # Try yt-dlp first
+    # Try Invidious first as it's more reliable on cloud IPs
+    import httpx
+    instances = ["https://vinv.id", "https://invidious.snopyta.org", "https://yewtu.be", "https://invidious.nerdvpn.de"]
+    
+    invidious_error = None
+    for instance in instances:
+        try:
+            async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
+                resp = await client.get(f"{instance}/api/v1/videos/{id}")
+                if resp.status_code == 200:
+                    data = resp.json()
+                    adaptive_formats = data.get('adaptiveFormats', [])
+                    audio_formats = [f for f in adaptive_formats if f.get('type','').startswith('audio/')]
+                    if audio_formats:
+                        best_audio = sorted(audio_formats, key=lambda x: int(x.get('bitrate') or 0), reverse=True)[0]
+                        return {
+                            'stream_url': best_audio.get('url'),
+                            'title': data.get('title'),
+                            'thumbnail': data.get('videoThumbnails', [{}])[0].get('url') if data.get('videoThumbnails') else None,
+                            'artist': data.get('author'),
+                            'duration': data.get('lengthSeconds'),
+                            'source': f'Invidious ({instance})'
+                        }
+        except Exception as e:
+            print(f"Invidious instance {instance} failed: {str(e)}")
+            invidious_error = str(e)
+            continue
+
+    # Fallback to yt-dlp if Invidious fails
+    print(f"All Invidious instances failed. Last error: {invidious_error}. Trying yt-dlp...")
     try:
         with yt_dlp.YoutubeDL(YDL_OPTIONS) as ydl:
             loop = asyncio.get_event_loop()
@@ -109,42 +138,11 @@ async def get_stream(id: str = Query(...)):
                 'thumbnail': info.get('thumbnail'),
                 'artist': info.get('uploader'),
                 'duration': info.get('duration'),
+                'source': 'yt-dlp'
             }
     except Exception as e:
-        print(f"yt-dlp failed: {str(e)}. Trying Invidious fallback...")
-        
-        # Fallback to Invidious API
-        try:
-            # We try a few instances
-            instances = ["https://vinv.id", "https://invidious.snopyta.org", "https://yewtu.be"]
-            for instance in instances:
-                try:
-                    import requests
-                    resp = requests.get(f"{instance}/api/v1/videos/{id}", timeout=10)
-                    if resp.status_code == 200:
-                        data = resp.json()
-                        adaptive_formats = data.get('adaptiveFormats', [])
-                        # Filter for audio formats
-                        audio_formats = [f for f in adaptive_formats if f.get('type','').startswith('audio/')]
-                        if audio_formats:
-                            # Use the highest bitrate audio
-                            best_audio = sorted(audio_formats, key=lambda x: int(x.get('bitrate') or 0), reverse=True)[0]
-                            return {
-                                'stream_url': best_audio.get('url'),
-                                'title': data.get('title'),
-                                'thumbnail': data.get('videoThumbnails', [{}])[0].get('url'),
-                                'artist': data.get('author'),
-                                'duration': data.get('lengthSeconds'),
-                                'source': f'Invidious ({instance})'
-                            }
-                except Exception as inner_e:
-                    print(f"Instance {instance} failed: {str(inner_e)}")
-                    continue
-            
-            raise HTTPException(status_code=500, detail="All streaming sources failed")
-        except Exception as final_e:
-            print(f"Stream Error: {str(final_e)}")
-            raise HTTPException(status_code=500, detail=f"Streaming failed: {str(final_e)}")
+        print(f"yt-dlp also failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"All streaming sources failed. Invidious: {invidious_error}, yt-dlp: {str(e)}")
 
 if __name__ == "__main__":
     import uvicorn
