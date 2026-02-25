@@ -59,12 +59,12 @@ export default function ProfileScreen() {
         <SafeAreaView className="flex-1 bg-vortex-obsidian">
             <ScrollView className="px-6 mt-10" showsVerticalScrollIndicator={false}>
                 <View className="flex-row items-center mb-8">
-                    <View className="w-16 h-16 bg-vortex-saffron rounded-full items-center justify-center border-2 border-white/20">
-                        <Text className="text-black text-2xl font-bold">V</Text>
+                    <View className="w-16 h-16 bg-vortex-saffron/20 rounded-full items-center justify-center border border-vortex-saffron/30">
+                        <Settings size={32} color="#FF9933" />
                     </View>
                     <View className="ml-4">
-                        <Text className="text-white text-2xl font-extrabold">Vortex User</Text>
-                        <Text className="text-vortex-textSecondary text-sm">Premium Member</Text>
+                        <Text className="text-white text-3xl font-extrabold">Settings</Text>
+                        <Text className="text-vortex-textSecondary text-sm">Configure your experience</Text>
                     </View>
                 </View>
 
@@ -83,11 +83,14 @@ export default function ProfileScreen() {
                     </View>
 
                     <TouchableOpacity
-                        className="mt-4"
-                        onPress={() => setShowAdvanced(!showAdvanced)}
+                        className="mt-6 py-4 bg-white/5 rounded-xl border border-white/10 items-center justify-center"
+                        onPress={() => {
+                            console.log('Toggling advanced settings');
+                            setShowAdvanced(!showAdvanced);
+                        }}
                     >
-                        <Text className="text-vortex-textSecondary text-xs text-center">
-                            {showAdvanced ? "Hide Advanced Settings" : "Advanced Connection Settings"}
+                        <Text className="text-vortex-textSecondary text-sm font-medium">
+                            {showAdvanced ? "Hide Developer Settings" : "Advanced Connection Settings"}
                         </Text>
                     </TouchableOpacity>
                 </View>

@@ -47,9 +47,9 @@ function TabNavigator() {
                     options={{ tabBarIcon: ({ color }) => <Library color={color} size={24} /> }}
                 />
                 <Tab.Screen
-                    name="Profile"
+                    name="Settings"
                     component={ProfileScreen}
-                    options={{ tabBarIcon: ({ color }) => <User color={color} size={24} /> }}
+                    options={{ tabBarIcon: ({ color }) => <Settings color={color} size={24} /> }}
                 />
             </Tab.Navigator>
             <MiniPlayer />
