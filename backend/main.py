@@ -16,7 +16,7 @@ app.add_middleware(
 
 @app.get("/health")
 async def health_check():
-    return {"status": "healthy", "ver": "v1.0.4-multi-fallback"}
+    return {"status": "healthy", "ver": "v1.0.5-pytubefix"}
 
 @app.get("/version")
 async def get_version():
@@ -120,46 +120,15 @@ async def get_stream(id: str = Query(...)):
                             'duration': data.get('lengthSeconds'),
                             'source': f'Invidious ({instance})'
                         }
-        except Exception as e:
-            invidious_errors.append(f"{instance}: {str(e)}")
+        except:
             continue
 
-    # 2. Try InnerTube as a secondary option
-    try:
-        from innertube import InnerTube
-        client = InnerTube("ANDROID")
-        data = client.player(id)
-        streaming_data = data.get("streamingData", {})
-        formats = streaming_data.get("adaptiveFormats", [])
-        audio_formats = [f for f in formats if f.get("mimeType", "").startswith("audio/")]
-        if audio_formats:
-            best_audio = sorted(audio_formats, key=lambda x: int(x.get("bitrate") or 0), reverse=True)[0]
-            if "url" in best_audio:
-                return {
-                    'stream_url': best_audio["url"],
-                    'title': data.get("videoDetails", {}).get("title"),
-                    'thumbnail': data.get("videoDetails", {}).get("thumbnail", {}).get("thumbnails", [{}])[0].get("url"),
-                    'artist': data.get("videoDetails", {}).get("author"),
-                    'duration': data.get("videoDetails", {}).get("lengthSeconds"),
-                    'source': 'InnerTube'
-                }
-    except Exception as ite:
-        print(f"InnerTube fallback failed: {str(ite)}")
-
-    # 3. Fallback to yt-dlp as a last resort
-    print(f"All preferred sources failed. Trying yt-dlp...")
+    # 3. Last resort: yt-dlp
     try:
         with yt_dlp.YoutubeDL(YDL_OPTIONS) as ydl:
             loop = asyncio.get_event_loop()
             info = await loop.run_in_executor(None, lambda: ydl.extract_info(f"https://www.youtube.com/watch?v={id}", download=False))
-            
-            formats = info.get('formats', [])
-            audio_formats = [f for f in formats if f.get('vcodec') == 'none']
-            if not audio_formats:
-                audio_formats = formats 
-            
-            best_format = sorted(audio_formats, key=lambda x: x.get('abr') or 0, reverse=True)[0]
-            
+            best_format = sorted([f for f in info.get('formats', []) if f.get('vcodec') == 'none'], key=lambda x: x.get('abr') or 0, reverse=True)[0]
             return {
                 'stream_url': best_format.get('url'),
                 'title': info.get('title'),
@@ -168,9 +137,8 @@ async def get_stream(id: str = Query(...)):
                 'duration': info.get('duration'),
                 'source': 'yt-dlp'
             }
-    except Exception as e:
-        print(f"yt-dlp final failure: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Streaming failed. Invidious errors: {invidious_errors[:2]}, yt-dlp: {str(e)}")
+    except Exception as final_e:
+        raise HTTPException(status_code=500, detail=f"All sources failed: {str(final_e)}")
 
 if __name__ == "__main__":
     import uvicorn
