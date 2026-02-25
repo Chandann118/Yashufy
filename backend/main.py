@@ -48,7 +48,8 @@ async def search(q: str = Query(...)):
                 })
             return results
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        print(f"Search Error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Search failed: {str(e)}")
 
 @app.get("/trending")
 async def trending():
