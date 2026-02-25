@@ -16,7 +16,7 @@ app.add_middleware(
 
 @app.get("/health")
 async def health_check():
-    return {"status": "healthy", "ver": "v1.0.3-invidious-primary"}
+    return {"status": "healthy", "ver": "v1.0.4-multi-fallback"}
 
 @app.get("/version")
 async def get_version():
@@ -90,14 +90,21 @@ async def home_content():
 
 @app.get("/stream")
 async def get_stream(id: str = Query(...)):
-    # Try Invidious first as it's more reliable on cloud IPs
     import httpx
-    instances = ["https://vinv.id", "https://invidious.snopyta.org", "https://yewtu.be", "https://invidious.nerdvpn.de"]
+    # 1. Try a list of robust Invidious instances first
+    instances = [
+        "https://invidious.projectsegfau.lt",
+        "https://inv.zzls.xyz",
+        "https://invidious.snopyta.org",
+        "https://yewtu.be",
+        "https://invidious.nerdvpn.de",
+        "https://inv.riverside.rocks"
+    ]
     
-    invidious_error = None
+    invidious_errors = []
     for instance in instances:
         try:
-            async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
+            async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
                 resp = await client.get(f"{instance}/api/v1/videos/{id}")
                 if resp.status_code == 200:
                     data = resp.json()
@@ -114,12 +121,33 @@ async def get_stream(id: str = Query(...)):
                             'source': f'Invidious ({instance})'
                         }
         except Exception as e:
-            print(f"Invidious instance {instance} failed: {str(e)}")
-            invidious_error = str(e)
+            invidious_errors.append(f"{instance}: {str(e)}")
             continue
 
-    # Fallback to yt-dlp if Invidious fails
-    print(f"All Invidious instances failed. Last error: {invidious_error}. Trying yt-dlp...")
+    # 2. Try InnerTube as a secondary option
+    try:
+        from innertube import InnerTube
+        client = InnerTube("ANDROID")
+        data = client.player(id)
+        streaming_data = data.get("streamingData", {})
+        formats = streaming_data.get("adaptiveFormats", [])
+        audio_formats = [f for f in formats if f.get("mimeType", "").startswith("audio/")]
+        if audio_formats:
+            best_audio = sorted(audio_formats, key=lambda x: int(x.get("bitrate") or 0), reverse=True)[0]
+            if "url" in best_audio:
+                return {
+                    'stream_url': best_audio["url"],
+                    'title': data.get("videoDetails", {}).get("title"),
+                    'thumbnail': data.get("videoDetails", {}).get("thumbnail", {}).get("thumbnails", [{}])[0].get("url"),
+                    'artist': data.get("videoDetails", {}).get("author"),
+                    'duration': data.get("videoDetails", {}).get("lengthSeconds"),
+                    'source': 'InnerTube'
+                }
+    except Exception as ite:
+        print(f"InnerTube fallback failed: {str(ite)}")
+
+    # 3. Fallback to yt-dlp as a last resort
+    print(f"All preferred sources failed. Trying yt-dlp...")
     try:
         with yt_dlp.YoutubeDL(YDL_OPTIONS) as ydl:
             loop = asyncio.get_event_loop()
@@ -141,8 +169,8 @@ async def get_stream(id: str = Query(...)):
                 'source': 'yt-dlp'
             }
     except Exception as e:
-        print(f"yt-dlp also failed: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"All streaming sources failed. Invidious: {invidious_error}, yt-dlp: {str(e)}")
+        print(f"yt-dlp final failure: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Streaming failed. Invidious errors: {invidious_errors[:2]}, yt-dlp: {str(e)}")
 
 if __name__ == "__main__":
     import uvicorn
