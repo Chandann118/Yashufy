@@ -16,7 +16,7 @@ app.add_middleware(
 
 @app.get("/health")
 async def health_check():
-    return {"status": "healthy", "ver": "v1.0.6-sc-fallback"}
+    return {"status": "healthy", "ver": "v1.0.7-verified-streaming"}
 
 @app.get("/version")
 async def get_version():
@@ -90,7 +90,32 @@ async def home_content():
 
 @app.get("/stream")
 async def get_stream(id: str = Query(...)):
-    # 1. Try pytubefix first (YouTube)
+    # 1. Try Invidious (Currently most reliable for cloud IPs)
+    # Using a known working instance on Render: iv.ggtyler.dev
+    import httpx
+    instances = ["https://iv.ggtyler.dev", "https://invidious.projectsegfau.lt", "https://inv.zzls.xyz", "https://yewtu.be"]
+    for instance in instances:
+        try:
+            async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
+                resp = await client.get(f"{instance}/api/v1/videos/{id}")
+                if resp.status_code == 200:
+                    data = resp.json()
+                    adaptive_formats = data.get('adaptiveFormats', [])
+                    audio_formats = [f for f in adaptive_formats if f.get('type','').startswith('audio/')]
+                    if audio_formats:
+                        best_audio = sorted(audio_formats, key=lambda x: int(x.get('bitrate') or 0), reverse=True)[0]
+                        return {
+                            'stream_url': best_audio.get('url'),
+                            'title': data.get('title'),
+                            'thumbnail': data.get('videoThumbnails', [{}])[0].get('url') if data.get('videoThumbnails') else None,
+                            'artist': data.get('author'),
+                            'duration': data.get('lengthSeconds'),
+                            'source': f'Invidious ({instance})'
+                        }
+        except:
+            continue
+
+    # 2. Try pytubefix (YouTube)
     try:
         from pytubefix import YouTube
         yt = YouTube(f"https://www.youtube.com/watch?v={id}")
@@ -105,21 +130,20 @@ async def get_stream(id: str = Query(...)):
                 'source': 'pytubefix'
             }
     except Exception as e:
-        print(f"pytubefix for {id} failed: {str(e)}. Trying SoundCloud fallback...")
+        print(f"pytubefix failed: {str(e)}")
 
-    # 2. Fallback: Search same title on SoundCloud
+    # 3. Fallback: Search same title on SoundCloud
     try:
         import requests, re
-        # Get title from youtube-search-python if pytubefix failed to get it
         title = "song"
         try:
             from youtubesearchpython import Video
+            # Increase timeout/headers if needed
             vd = Video.get(f"https://www.youtube.com/watch?v={id}")
-            title = vd.get('title')
+            if vd: title = vd.get('title')
         except:
             pass
 
-        # Scrape SoundCloud client_id
         rsc = requests.get('https://soundcloud.com', headers={'User-Agent': 'Mozilla/5.0'}, timeout=5)
         match = re.search(r'src=\"(https://a-v2\.sndcdn\.com/assets/[^\"]+\.js)\"', rsc.text)
         if match:
@@ -128,29 +152,29 @@ async def get_stream(id: str = Query(...)):
             cid_match = re.search(r'client_id:\"([a-zA-Z0-9]{32})\"', rj.text)
             if cid_match:
                 cid = cid_match.group(1)
-                # Search on SC
                 search_url = f'https://api-v2.soundcloud.com/search/tracks?q={title}&client_id={cid}&limit=1'
                 rss = requests.get(search_url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=5)
                 if rss.status_code == 200:
-                    track = rss.json()['collection'][0]
-                    transcodings = track.get('media', {}).get('transcodings', [])
-                    # Prefer progressive mp3
-                    best = next((t for t in transcodings if t['format']['protocol'] == 'progressive'), transcodings[0] if transcodings else None)
-                    if best:
-                        ru = requests.get(best['url'] + f'?client_id={cid}', headers={'User-Agent': 'Mozilla/5.0'}, timeout=5)
-                        if ru.status_code == 200:
-                            return {
-                                'stream_url': ru.json()['url'],
-                                'title': track.get('title'),
-                                'thumbnail': track.get('artwork_url'),
-                                'artist': track.get('user', {}).get('username'),
-                                'duration': track.get('duration') // 1000,
-                                'source': 'SoundCloud (Fallback)'
-                            }
+                    results = rss.json().get('collection', [])
+                    if results:
+                        track = results[0]
+                        transcodings = track.get('media', {}).get('transcodings', [])
+                        best = next((t for t in transcodings if t['format']['protocol'] == 'progressive'), transcodings[0] if transcodings else None)
+                        if best:
+                            ru = requests.get(best['url'] + f'?client_id={cid}', headers={'User-Agent': 'Mozilla/5.0'}, timeout=5)
+                            if ru.status_code == 200:
+                                return {
+                                    'stream_url': ru.json()['url'],
+                                    'title': track.get('title'),
+                                    'thumbnail': track.get('artwork_url'),
+                                    'artist': track.get('user', {}).get('username'),
+                                    'duration': track.get('duration') // 1000,
+                                    'source': 'SoundCloud'
+                                }
     except Exception as sce:
         print(f"SoundCloud fallback failed: {str(sce)}")
 
-    # 3. Last resort: yt-dlp
+    # 4. Last resort: yt-dlp
     try:
         with yt_dlp.YoutubeDL(YDL_OPTIONS) as ydl:
             loop = asyncio.get_event_loop()
@@ -165,7 +189,7 @@ async def get_stream(id: str = Query(...)):
                 'source': 'yt-dlp'
             }
     except Exception as final_e:
-        raise HTTPException(status_code=500, detail=f"All sources blocked. SoundCloud Error: {str(sce) if 'sce' in locals() else 'Unknown'}")
+        raise HTTPException(status_code=500, detail="Streaming currently unavailable from all sources. Please try again later.")
 
 if __name__ == "__main__":
     import uvicorn
