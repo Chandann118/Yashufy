@@ -90,8 +90,8 @@ async def home_content():
 
 @app.get("/stream")
 async def get_stream(id: str = Query(...)):
+    # Try yt-dlp first
     try:
-        # We still use yt-dlp for the actual stream extraction
         with yt_dlp.YoutubeDL(YDL_OPTIONS) as ydl:
             loop = asyncio.get_event_loop()
             info = await loop.run_in_executor(None, lambda: ydl.extract_info(f"https://www.youtube.com/watch?v={id}", download=False))
@@ -111,8 +111,40 @@ async def get_stream(id: str = Query(...)):
                 'duration': info.get('duration'),
             }
     except Exception as e:
-        print(f"Stream Error: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Streaming failed: {str(e)}")
+        print(f"yt-dlp failed: {str(e)}. Trying Invidious fallback...")
+        
+        # Fallback to Invidious API
+        try:
+            # We try a few instances
+            instances = ["https://vinv.id", "https://invidious.snopyta.org", "https://yewtu.be"]
+            for instance in instances:
+                try:
+                    import requests
+                    resp = requests.get(f"{instance}/api/v1/videos/{id}", timeout=10)
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        adaptive_formats = data.get('adaptiveFormats', [])
+                        # Filter for audio formats
+                        audio_formats = [f for f in adaptive_formats if f.get('type','').startswith('audio/')]
+                        if audio_formats:
+                            # Use the highest bitrate audio
+                            best_audio = sorted(audio_formats, key=lambda x: int(x.get('bitrate') or 0), reverse=True)[0]
+                            return {
+                                'stream_url': best_audio.get('url'),
+                                'title': data.get('title'),
+                                'thumbnail': data.get('videoThumbnails', [{}])[0].get('url'),
+                                'artist': data.get('author'),
+                                'duration': data.get('lengthSeconds'),
+                                'source': f'Invidious ({instance})'
+                            }
+                except Exception as inner_e:
+                    print(f"Instance {instance} failed: {str(inner_e)}")
+                    continue
+            
+            raise HTTPException(status_code=500, detail="All streaming sources failed")
+        except Exception as final_e:
+            print(f"Stream Error: {str(final_e)}")
+            raise HTTPException(status_code=500, detail=f"Streaming failed: {str(final_e)}")
 
 if __name__ == "__main__":
     import uvicorn
