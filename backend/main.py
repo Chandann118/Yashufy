@@ -18,6 +18,10 @@ app.add_middleware(
 async def health_check():
     return {"status": "healthy"}
 
+@app.get("/version")
+async def get_version():
+    return {"version": "1.0.1-yt-search-python"}
+
 YDL_OPTIONS = {
     'format': 'bestaudio/best',
     'noplaylist': True,
