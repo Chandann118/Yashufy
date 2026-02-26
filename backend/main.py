@@ -110,10 +110,16 @@ async def fetch_invidious_stream(client: httpx.AsyncClient, instance: str, video
             audio_formats = [f for f in adaptive_formats if f.get('type', '').startswith('audio/')]
             if audio_formats:
                 best_audio = sorted(audio_formats, key=lambda x: int(x.get('bitrate') or 0), reverse=True)[0]
+                
+                # Fix relative thumbnails
+                thumb = data.get('videoThumbnails', [{}])[0].get('url') if data.get('videoThumbnails') else None
+                if thumb and thumb.startswith('/'):
+                    thumb = f"{instance}{thumb}"
+                
                 return {
                     'stream_url': best_audio.get('url'),
                     'title': data.get('title'),
-                    'thumbnail': data.get('videoThumbnails', [{}])[0].get('url') if data.get('videoThumbnails') else None,
+                    'thumbnail': thumb,
                     'artist': data.get('author'),
                     'duration': data.get('lengthSeconds'),
                     'source': f'Invidious ({instance})'
@@ -144,16 +150,32 @@ async def get_stream(
     random.shuffle(instances)
     top_instances = instances[0:3]
 
-    logger.info(f"Trying Invidious parallel lookups: {top_instances}")
+    logger.info(f"Racing Invidious parallel lookups: {top_instances}")
     async with httpx.AsyncClient(follow_redirects=True) as client:
-        results = await asyncio.gather(*[fetch_invidious_stream(client, inst, id) for inst in top_instances])
+        # Create tasks for the race
+        tasks = [asyncio.create_task(fetch_invidious_stream(client, inst, id)) for inst in top_instances]
         
-        for res in results:
-            if res:
-                logger.info(f"SUCCESS: {res['source']}")
-                if res.get('thumbnail') and res['thumbnail'].startswith('http:'):
-                    res['thumbnail'] = res['thumbnail'].replace('http:', 'https:')
-                return res
+        # True Race: Return as soon as ONE completes successfully
+        found_res = None
+        while tasks:
+            done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+            for task in done:
+                try:
+                    res = await task
+                    if res and not found_res:
+                        found_res = res
+                        for p in pending:
+                            p.cancel()
+                        break
+                except Exception:
+                    pass
+            if found_res:
+                logger.info(f"SUCCESS: {found_res['source']} (Race Winner)")
+                if found_res.get('thumbnail') and found_res['thumbnail'].startswith('http:'):
+                    found_res['thumbnail'] = found_res['thumbnail'].replace('http:', 'https:')
+                return found_res
+            tasks = list(pending)
+            if not tasks: break
 
     # 2. Try pytubefix (YouTube)
     logger.info("Falling back to pytubefix")
