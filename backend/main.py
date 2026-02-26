@@ -325,19 +325,20 @@ async def get_stream(
 
     # 1. Try Invidious (Parallel Lookups) with resolved yt_id
     instances = [
-        "https://iv.ggtyler.dev",
-        "https://invidious.projectsegfau.lt",
+        "https://inv.nadeko.net",
         "https://inv.zzls.xyz",
+        "https://iv.datura.network",
+        "https://invidious.projectsegfau.lt",
         "https://yewtu.be",
-        "https://inv.riverside.rocks",
-        "https://invidious.namazso.eu"
+        "https://inv.tux.pizza",
+        "https://invidious.nerdvpn.de"
     ]
     random.shuffle(instances)
-    top_instances = instances[0:3]
+    top_instances = instances[0:4]
 
     logger.info(f"Racing Invidious parallel lookups for {yt_id}: {top_instances}")
     async with httpx.AsyncClient(follow_redirects=True) as client:
-        # Create tasks for the race
+        # Create tasks for the race with shorter timeout
         tasks = [asyncio.create_task(fetch_invidious_stream(client, inst, yt_id)) for inst in top_instances]
         
         # True Race: Return as soon as ONE completes successfully
@@ -422,26 +423,28 @@ async def get_stream(
                 if results:
                     track = results[0]
                     transcodings = track.get('media', {}).get('transcodings', [])
-                    best = next((t for t in transcodings if t['format']['protocol'] == 'hls'), None)
-                    if not best:
-                        best = next((t for t in transcodings if t['format']['protocol'] == 'progressive'), transcodings[0] if transcodings else None)
+                    
+                    # FORCE HLS: Progressive streams cut off at 1:45 because of SoundCloud's IP-range blocking
+                    best = next((t for t in transcodings if t.get('format', {}).get('protocol') == 'hls'), None)
                     
                     if best:
                         ru = requests.get(best['url'] + f'?client_id={cid}', headers={'User-Agent': 'Mozilla/5.0'}, timeout=5)
                         if ru.status_code == 200:
                             stream_url = ru.json()['url']
-                            logger.info(f"SUCCESS: SoundCloud ({best['format']['protocol']})")
+                            logger.info(f"SUCCESS: SoundCloud (HLS Forced)")
                             thumb = track.get('artwork_url')
                             if thumb: thumb = thumb.replace('-large', '-t500x500') # Better quality
                             if thumb and thumb.startswith('http:'): thumb = thumb.replace('http:', 'https:')
                             return {
                                 'stream_url': stream_url,
                                 'title': track.get('title'),
-                                'thumbnail': thumb,
+                                'thumbnail': thumb or 'https://images.unsplash.com/photo-1614613535308-eb5fbd3d2c17?w=500',
                                 'artist': track.get('user', {}).get('username'),
                                 'duration': track.get('duration') // 1000,
                                 'source': 'SoundCloud'
                             }
+                    else:
+                        logger.warning("No HLS transcoding found for SoundCloud track. Skipping to next fallback.")
     except Exception as sce:
         logger.warning(f"SoundCloud fallback failed: {str(sce)}")
 

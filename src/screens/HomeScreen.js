@@ -61,6 +61,7 @@ export default function HomeScreen({ navigation }) {
     const [recent, setRecent] = useState([]);
     const [spotlight, setSpotlight] = useState(null);
     const [loading, setLoading] = useState(true);
+    const [fetchingTrackId, setFetchingTrackId] = useState(null);
 
     const backendUrl = useSelector(state => state.settings.backendUrl);
     const dispatch = useDispatch();
@@ -100,10 +101,16 @@ export default function HomeScreen({ navigation }) {
     };
 
     const handlePlay = async (item) => {
+        if (fetchingTrackId) return; // Prevent multiple clicks
+
         try {
+            setFetchingTrackId(item.id);
             const streamResponse = await fetch(`${backendUrl}/stream?id=${item.id}&title=${encodeURIComponent(item.title)}&artist=${encodeURIComponent(item.artist)}`, {
                 headers: { 'Bypass-Tunnel-Reminder': 'true' }
             });
+
+            if (!streamResponse.ok) throw new Error('Failed to fetch stream');
+
             const streamData = await streamResponse.json();
 
             const track = {
@@ -112,7 +119,7 @@ export default function HomeScreen({ navigation }) {
                 title: item.title,
                 artist: item.artist,
                 artwork: streamData.thumbnail || item.thumbnail,
-                duration: item.duration,
+                duration: item.duration || streamData.duration,
             };
 
             dispatch(setTrack(track));
@@ -127,6 +134,9 @@ export default function HomeScreen({ navigation }) {
             navigation.navigate('Player');
         } catch (error) {
             console.error('Playback error:', error);
+            alert("Streaming service is slow or busy. Please try another song.");
+        } finally {
+            setFetchingTrackId(null);
         }
     };
 
