@@ -89,10 +89,14 @@ async def home_content():
         raise HTTPException(status_code=500, detail=f"Home content failed: {str(e)}")
 
 @app.get("/stream")
-async def get_stream(id: str = Query(...)):
+async def get_stream(
+    id: str = Query(...), 
+    title: Optional[str] = Query(None), 
+    artist: Optional[str] = Query(None)
+):
     """
     Enhanced streaming logic with multiple fallback layers.
-    Priority: Invidious (Rotating) -> pytubefix -> SoundCloud -> yt-dlp
+    Priority: Invidious (Rotating) -> pytubefix -> SoundCloud (HLS Preferred) -> yt-dlp
     """
     import httpx
     import logging
@@ -105,7 +109,6 @@ async def get_stream(id: str = Query(...)):
     logger = logging.getLogger("VortexMusic")
 
     # 1. Try Invidious (Rotating Instances)
-    # Selected high-uptime instances
     instances = [
         "https://iv.ggtyler.dev",
         "https://invidious.projectsegfau.lt",
@@ -114,7 +117,7 @@ async def get_stream(id: str = Query(...)):
         "https://inv.riverside.rocks",
         "https://invidious.namazso.eu"
     ]
-    random.shuffle(instances)  # Randomize to spread load
+    random.shuffle(instances)
 
     for instance in instances:
         try:
@@ -126,7 +129,6 @@ async def get_stream(id: str = Query(...)):
                     adaptive_formats = data.get('adaptiveFormats', [])
                     audio_formats = [f for f in adaptive_formats if f.get('type', '').startswith('audio/')]
                     if audio_formats:
-                        # Sort by bitrate to get best quality
                         best_audio = sorted(audio_formats, key=lambda x: int(x.get('bitrate') or 0), reverse=True)[0]
                         logger.info(f"SUCCESS: Invidious ({instance})")
                         return {
@@ -137,8 +139,6 @@ async def get_stream(id: str = Query(...)):
                             'duration': data.get('lengthSeconds'),
                             'source': f'Invidious ({instance})'
                         }
-                else:
-                    logger.warning(f"Invidious instance {instance} returned status {resp.status_code}")
         except Exception as inv_e:
             logger.warning(f"Invidious instance {instance} failed: {str(inv_e)}")
             continue
@@ -147,7 +147,6 @@ async def get_stream(id: str = Query(...)):
     logger.info("Falling back to pytubefix")
     try:
         from pytubefix import YouTube
-        # Using a reliable client to avoid block
         yt = YouTube(f"https://www.youtube.com/watch?v={id}")
         audio_stream = yt.streams.filter(only_audio=True).first()
         if audio_stream:
@@ -166,14 +165,17 @@ async def get_stream(id: str = Query(...)):
     # 3. Fallback: Search same title on SoundCloud
     logger.info("Falling back to SoundCloud")
     try:
-        title = "song"
-        # Try to get title from youtube-search-python if possible
-        try:
-            from youtubesearchpython import Video
-            vd = Video.get(f"https://www.youtube.com/watch?v={id}")
-            if vd: title = vd.get('title')
-        except:
-            logger.warning("Could not fetch title for SoundCloud search fallback")
+        search_query = f"{title} {artist}" if title and artist else title or "song"
+        
+        # If no title/artist provided, try to get from YouTube metadata (might be blocked)
+        if search_query == "song":
+            try:
+                from youtubesearchpython import Video
+                vd = Video.get(f"https://www.youtube.com/watch?v={id}")
+                if vd and vd.get('title'):
+                    search_query = vd.get('title')
+            except:
+                logger.warning("YouTube metadata blocked; using generic search query")
 
         # SoundCloud CID extraction
         rsc = requests.get('https://soundcloud.com', headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
@@ -188,20 +190,27 @@ async def get_stream(id: str = Query(...)):
                 break
         
         if cid:
-            search_url = f'https://api-v2.soundcloud.com/search/tracks?q={title}&client_id={cid}&limit=1'
+            search_url = f'https://api-v2.soundcloud.com/search/tracks?q={search_query}&client_id={cid}&limit=1'
             rss = requests.get(search_url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
             if rss.status_code == 200:
                 results = rss.json().get('collection', [])
                 if results:
                     track = results[0]
                     transcodings = track.get('media', {}).get('transcodings', [])
-                    best = next((t for t in transcodings if t['format']['protocol'] == 'progressive'), transcodings[0] if transcodings else None)
+                    
+                    # PREFER HLS OVER PROGRESSIVE TO FIX 1:45 CUTOFF
+                    # HLS streams are often the full track, while progressive might be a preview
+                    best = next((t for t in transcodings if t['format']['protocol'] == 'hls'), None)
+                    if not best:
+                        best = next((t for t in transcodings if t['format']['protocol'] == 'progressive'), transcodings[0] if transcodings else None)
+                    
                     if best:
                         ru = requests.get(best['url'] + f'?client_id={cid}', headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
                         if ru.status_code == 200:
-                            logger.info("SUCCESS: SoundCloud")
+                            stream_url = ru.json()['url']
+                            logger.info(f"SUCCESS: SoundCloud ({best['format']['protocol']})")
                             return {
-                                'stream_url': ru.json()['url'],
+                                'stream_url': stream_url,
                                 'title': track.get('title'),
                                 'thumbnail': track.get('artwork_url'),
                                 'artist': track.get('user', {}).get('username'),

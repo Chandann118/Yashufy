@@ -33,7 +33,7 @@ export default function SearchScreen({ navigation }) {
 
     const handlePlay = async (item) => {
         try {
-            const streamResponse = await fetch(`${backendUrl}/stream?id=${item.id}`, {
+            const streamResponse = await fetch(`${backendUrl}/stream?id=${item.id}&title=${encodeURIComponent(item.title)}&artist=${encodeURIComponent(item.artist)}`, {
                 headers: { 'Bypass-Tunnel-Reminder': 'true' }
             });
             const streamData = await streamResponse.json();
