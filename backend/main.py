@@ -323,61 +323,131 @@ async def get_stream(
     id: str = Query(...), 
     title: Optional[str] = Query(None), 
     artist: Optional[str] = Query(None),
-    duration_total: Optional[str] = Query(None) # Keep as string to avoid parsing errors
+    duration_total: Optional[str] = Query(None)
 ):
     """
     Optimized streaming logic with parallel lookups and caching.
     Priority: Invidious (Parallel) -> pytubefix -> SoundCloud (HLS) -> yt-dlp
     """
+    yt_id = id
+    
     # Resolve Saavn/Other non-YT IDs with YTMusic pinpoint
-    yt_id = id # Initialize yt_id with the provided id
     if (len(id) != 11 or id.startswith('saavn_') or id.startswith('deezer_')) and title and artist:
-        logger.info(f"Resolving metadata via YTMusic: {title} - {artist}")
+        logger.info(f"Resolving metadata for: {title} - {artist}")
         try:
             from ytmusicapi import YTMusic
             ytm = YTMusic()
-            yt_res = ytm.search(f"{title} {artist}", filter="songs", limit=1)
-            if yt_res:
-        "https://invidious.nerdvpn.de",
-        "https://iv.melmac.space",
-        "https://inv.tuep.pizza"
-    ]
-    random.shuffle(instances)
-    top_instances = instances[0:5]
+            search_results = ytm.search(f"{title} {artist}", filter="songs", limit=1)
+            if search_results:
+                yt_id = search_results[0].get('videoId')
+                logger.info(f"YTMusic resolved to: {yt_id}")
+        except Exception as yte:
+            logger.warning(f"YTMusic resolution failed: {str(yte)}")
 
-    logger.info(f"Racing Invidious parallel lookups for {yt_id}: {top_instances}")
-    async with httpx.AsyncClient(follow_redirects=True) as client:
-        # Create tasks for the race with shorter timeout
-        tasks = [asyncio.create_task(fetch_invidious_stream(client, inst, yt_id)) for inst in top_instances]
-        
-        # True Race: Return as soon as ONE completes successfully
-        found_res = None
-        while tasks:
-            done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
-            for task in done:
-                try:
-                    res = await task
-                    if res and not found_res:
-                        found_res = res
-                        for p in pending:
-                            p.cancel()
-                        break
-                except Exception as te:
-                    logger.warning(f"Race task error: {str(te)}")
-                    pass
-            if found_res and isinstance(found_res, dict):
-                # Verify duration if metadata provides it
-                if title and artist and not is_duration_match(duration_total, found_res.get('duration')):
-                    logger.warning("Invidious race winner failed duration guard. Continuing...")
-                    found_res = None
-                else:
-                    logger.info(f"SUCCESS: {found_res.get('source')} (Race Winner)")
-                    thumb = found_res.get('thumbnail')
-                    if thumb and isinstance(thumb, str) and thumb.startswith('http:'):
+    # 1. Parallel Invidious Race
+    if yt_id:
+        try:
+            logger.info(f"Starting Invidious race for: {yt_id}")
+            tasks = [fetch_invidious_stream(yt_id, inst) for inst in INVIDIOUS_INSTANCES]
+            results = await asyncio.gather(*tasks)
+            found_res = next((r for r in results if r), None)
+            
+            if found_res:
+                # Duration Guard
+                if title and artist and duration_total:
+                    try:
+                        dt = float(duration_total)
+                        st = float(found_res.get('duration', 0))
+                        if st > 0 and abs(dt - st) > 60:
+                            found_res = None
+                    except: pass
+                
+                if found_res:
+                    thumb = found_res.get('thumbnail') or ""
+                    if thumb.startswith('http:'):
                         found_res['thumbnail'] = thumb.replace('http:', 'https:')
+                    logger.info(f"SUCCESS: Invidious")
                     return found_res
-            tasks = list(pending)
-            if not tasks: break
+        except Exception as race_e:
+            logger.warning(f"Invidious race error: {str(race_e)}")
+
+    # 2. Fallback: pytubefix
+    if yt_id:
+        try:
+            from pytubefix import YouTube
+            yt = YouTube(f"https://youtube.com/watch?v={yt_id}")
+            audio_stream = yt.streams.get_audio_only()
+            if audio_stream:
+                logger.info("SUCCESS: pytubefix")
+                return {
+                    'stream_url': audio_stream.url,
+                    'title': yt.title,
+                    'thumbnail': yt.thumbnail_url,
+                    'artist': yt.author,
+                    'duration': yt.length,
+                    'source': 'pytubefix'
+                }
+        except Exception as py_e:
+            logger.warning(f"pytubefix failed: {str(py_e)}")
+
+    # 3. Fallback: SoundCloud HLS (Safety Net)
+    logger.info("Falling back to SoundCloud HLS")
+    try:
+        search_query = f"{title} {artist}" if title and artist else title or "song"
+        global SC_CID_CACHE
+        cid = SC_CID_CACHE.get("cid")
+        if not cid or time.time() > SC_CID_CACHE.get("expiry", 0):
+            rsc = requests.get('https://soundcloud.com', headers={'User-Agent': 'Mozilla/5.0'}, timeout=5)
+            js_matches = re.findall(r'src=\"(https://a-v2\.sndcdn\.com/assets/[^\"]+\.js)\"', rsc.text)
+            for js_url in js_matches:
+                rj = requests.get(js_url, timeout=5)
+                cid_match = re.search(r'client_id:\"([a-zA-Z0-9]{32})\"', rj.text)
+                if cid_match:
+                    cid = cid_match.group(1)
+                    SC_CID_CACHE = {"cid": cid, "expiry": time.time() + 3600}
+                    break
+        
+        if cid:
+            rss = requests.get(f'https://api-v2.soundcloud.com/search/tracks?q={search_query}&client_id={cid}&limit=1', headers={'User-Agent': 'Mozilla/5.0'}, timeout=5)
+            if rss.status_code == 200:
+                sc_results = rss.json().get('collection', [])
+                if sc_results:
+                    track = sc_results[0]
+                    transcodings = track.get('media', {}).get('transcodings', [])
+                    best = next((t for t in transcodings if t.get('format', {}).get('protocol') == 'hls'), None)
+                    if best:
+                        ru = requests.get(best['url'] + f'?client_id={cid}', headers={'User-Agent': 'Mozilla/5.0'}, timeout=5)
+                        if ru.status_code == 200:
+                            logger.info("SUCCESS: SoundCloud HLS")
+                            thumb = track.get('artwork_url', '').replace('-large', '-t500x500')
+                            if thumb.startswith('http:'): thumb = thumb.replace('http:', 'https:')
+                            return {
+                                'stream_url': ru.json()['url'],
+                                'title': track.get('title'),
+                                'thumbnail': thumb or 'https://images.unsplash.com/photo-1614613535308-eb5fbd3d2c17?w=500',
+                                'artist': track.get('user', {}).get('username'),
+                                'duration': track.get('duration') // 1000,
+                                'source': 'SoundCloud'
+                            }
+    except Exception as sce:
+        logger.warning(f"SoundCloud safety fallback failed: {str(sce)}")
+
+    # 4. Ultimate Fallback: yt-dlp
+    if yt_id:
+        try:
+            with yt_dlp.YoutubeDL(YDL_OPTIONS) as ydl:
+                info = ydl.extract_info(f"https://www.youtube.com/watch?v={yt_id}", download=False)
+                return {
+                    'stream_url': info.get('url'),
+                    'title': info.get('title'),
+                    'thumbnail': info.get('thumbnail'),
+                    'artist': info.get('uploader'),
+                    'duration': info.get('duration'),
+                    'source': 'yt-dlp'
+                }
+        except Exception: pass
+
+    raise HTTPException(status_code=503, detail="No stream available")
 
     # 2. Try pytubefix (YouTube)
     logger.info("Falling back to pytubefix")
