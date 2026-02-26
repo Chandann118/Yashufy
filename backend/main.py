@@ -47,6 +47,85 @@ YDL_OPTIONS = {
     }
 }
 
+class SaavnAPI:
+    """Helper for JioSaavn Internal API lookup."""
+    BASE_URL = "https://www.jiosaavn.com/api.php"
+    
+    @staticmethod
+    def _format_song(song):
+        # Upgrade image to 500x500
+        image = song.get('image', '').replace('150x150', '500x500')
+        if image.startswith('http:'): image = image.replace('http:', 'https:')
+        
+        # Format duration
+        duration = song.get('duration', 0)
+        try: duration = int(duration)
+        except: duration = 0
+            
+        return {
+            'id': song.get('id'),
+            'type': 'saavn',
+            'title': song.get('title') or song.get('song'),
+            'artist': song.get('primary_artists') or song.get('singers') or 'Unknown',
+            'thumbnail': image,
+            'duration': duration,
+            'album': song.get('album'),
+            'year': song.get('year'),
+            'language': song.get('language'),
+            'url': song.get('perma_url')
+        }
+
+    async def search(self, query: str):
+        params = {
+            '__call': 'autocomplete.get',
+            '_format': 'json',
+            '_marker': '0',
+            'cc': 'in',
+            'includeMetaTags': '1',
+            'query': query
+        }
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(self.BASE_URL, params=params, timeout=10.0)
+            if resp.status_code == 200:
+                data = resp.json()
+                songs = data.get('songs', {}).get('data', [])
+                return [self._format_song(s) for s in songs]
+        return []
+
+    async def get_charts(self):
+        # Fetch Weekly Top 15 as home content
+        params = {
+            '__call': 'content.getCharts',
+            '_format': 'json',
+            '_marker': '0',
+            'cc': 'in',
+        }
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(self.BASE_URL, params=params, timeout=10.0)
+            if resp.status_code == 200:
+                data = resp.json()
+                # Return first chart
+                if data:
+                    chart_id = data[0].get('listid')
+                    return await self.get_playlist(chart_id)
+        return []
+
+    async def get_playlist(self, listid: str):
+        params = {
+            '__call': 'playlist.getDetails',
+            '_format': 'json',
+            'listid': listid
+        }
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(self.BASE_URL, params=params, timeout=10.0)
+            if resp.status_code == 200:
+                data = resp.json()
+                songs = data.get('songs', [])
+                return [self._format_song(s) for s in songs]
+        return []
+
+saavn = SaavnAPI()
+
 def format_search_result(result):
     return {
         'id': result.get('id'),
@@ -60,30 +139,35 @@ def format_search_result(result):
 @app.get("/search")
 async def search(q: str = Query(...)):
     try:
+        # Primary: JioSaavn
+        results = await saavn.search(q)
+        if results:
+            return results
+            
+        # Fallback: YouTube Search
         search_engine = VideosSearch(q, limit=15)
-        results = search_engine.result()
-        
-        formatted_results = []
-        for video in results.get('result', []):
-            formatted_results.append(format_search_result(video))
-        return formatted_results
+        yt_results = search_engine.result().get('result', [])
+        return [format_search_result(v) for v in yt_results]
     except Exception as e:
         logger.error(f"Search Error: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Search failed: {str(e)}")
+        # Ultimate fallback
+        return []
 
 @app.get("/trending")
 async def trending():
     try:
-        search_engine = VideosSearch("trending music hits 2024", limit=10)
-        results = search_engine.result()
-        
-        formatted_results = []
-        for video in results.get('result', []):
-            formatted_results.append(format_search_result(video))
-        return formatted_results
+        # Get Saavn Charts
+        results = await saavn.get_charts()
+        if results:
+            return results
+            
+        # YT fallback
+        search_engine = VideosSearch("popular music 2024", limit=10)
+        yt_results = search_engine.result().get('result', [])
+        return [format_search_result(v) for v in yt_results]
     except Exception as e:
         logger.error(f"Trending Error: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Trending fetch failed: {str(e)}")
+        return []
 
 @app.get("/home")
 async def home_content():
@@ -95,7 +179,7 @@ async def home_content():
         }
     except Exception as e:
         logger.error(f"Home Content Error: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Home content failed: {str(e)}")
+        raise HTTPException(status_code=500, detail="Home content failed")
 
 # Global cache for SoundCloud Client ID
 SC_CID_CACHE = {"cid": None, "expiry": 0.0}
@@ -138,7 +222,27 @@ async def get_stream(
     Optimized streaming logic with parallel lookups and caching.
     Priority: Invidious (Parallel) -> pytubefix -> SoundCloud (HLS) -> yt-dlp
     """
-    # 1. Try Invidious (Parallel Lookups)
+    # If ID looks like Saavn or title/artist are provided, resolve to YT ID first
+    yt_id = id
+    is_saavn = len(id) != 11 or (id.isalnum() and not any(c.isupper() for c in id) and not any(c.islower() for c in id)) # Very rough check
+    
+    # Better Saavn check: Saavn IDs are often different lengths or alphanumeric
+    if (len(id) < 11 or len(id) > 12) and title and artist:
+        is_saavn = True
+
+    if is_saavn and title and artist:
+        logger.info(f"Resolving Saavn track to YouTube: {title} - {artist}")
+        try:
+            search_query = f"{title} {artist} official audio"
+            search_engine = VideosSearch(search_query, limit=1)
+            yt_res = search_engine.result().get('result', [])
+            if yt_res:
+                yt_id = yt_res[0].get('id')
+                logger.info(f"Resolved to YT ID: {yt_id}")
+        except Exception as e:
+            logger.warning(f"Metadata resolution failed: {str(e)}")
+
+    # 1. Try Invidious (Parallel Lookups) with resolved yt_id
     instances = [
         "https://iv.ggtyler.dev",
         "https://invidious.projectsegfau.lt",
@@ -150,10 +254,10 @@ async def get_stream(
     random.shuffle(instances)
     top_instances = instances[0:3]
 
-    logger.info(f"Racing Invidious parallel lookups: {top_instances}")
+    logger.info(f"Racing Invidious parallel lookups for {yt_id}: {top_instances}")
     async with httpx.AsyncClient(follow_redirects=True) as client:
         # Create tasks for the race
-        tasks = [asyncio.create_task(fetch_invidious_stream(client, inst, id)) for inst in top_instances]
+        tasks = [asyncio.create_task(fetch_invidious_stream(client, inst, yt_id)) for inst in top_instances]
         
         # True Race: Return as soon as ONE completes successfully
         found_res = None
@@ -181,7 +285,7 @@ async def get_stream(
     logger.info("Falling back to pytubefix")
     try:
         from pytubefix import YouTube
-        yt = YouTube(f"https://www.youtube.com/watch?v={id}")
+        yt = YouTube(f"https://www.youtube.com/watch?v={yt_id}")
         audio_stream = yt.streams.filter(only_audio=True).first()
         if audio_stream:
             logger.info("SUCCESS: pytubefix")
@@ -206,7 +310,7 @@ async def get_stream(
         if search_query == "song":
             try:
                 from youtubesearchpython import Video
-                vd = Video.get(f"https://www.youtube.com/watch?v={id}")
+                vd = Video.get(f"https://www.youtube.com/watch?v={yt_id}")
                 if vd and vd.get('title'):
                     search_query = vd.get('title')
             except:
@@ -263,7 +367,7 @@ async def get_stream(
     try:
         with yt_dlp.YoutubeDL(YDL_OPTIONS) as ydl:
             loop = asyncio.get_event_loop()
-            info = await loop.run_in_executor(None, lambda: ydl.extract_info(f"https://www.youtube.com/watch?v={id}", download=False))
+            info = await loop.run_in_executor(None, lambda: ydl.extract_info(f"https://www.youtube.com/watch?v={yt_id}", download=False))
             formats = [f for f in info.get('formats', []) if f.get('vcodec') == 'none']
             if formats:
                 best_format = sorted(formats, key=lambda x: x.get('abr') or 0, reverse=True)[0]
@@ -279,7 +383,7 @@ async def get_stream(
                     'source': 'yt-dlp'
                 }
     except Exception as final_e:
-        logger.error(f"Critical Failure for ID {id}")
+        logger.error(f"Critical Failure for ID {yt_id}")
         raise HTTPException(status_code=500, detail="Playback unavailable. Please try another song.")
 
 if __name__ == "__main__":
