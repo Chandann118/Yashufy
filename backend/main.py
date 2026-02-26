@@ -21,6 +21,18 @@ logger = logging.getLogger("VortexMusic")
 # Global cache for SoundCloud Client ID
 SC_CID_CACHE = {"cid": None, "expiry": 0.0}
 
+INVIDIOUS_INSTANCES = [
+    "https://inv.nadeko.net",
+    "https://inv.zzls.xyz",
+    "https://iv.datura.network",
+    "https://invidious.projectsegfau.lt",
+    "https://yewtu.be",
+    "https://inv.tux.pizza",
+    "https://invidious.nerdvpn.de",
+    "https://iv.melmac.space",
+    "https://inv.tuep.pizza"
+]
+
 app = FastAPI(title="Vortex Music Backend")
 
 app.add_middleware(
@@ -348,19 +360,20 @@ async def get_stream(
     if yt_id:
         try:
             logger.info(f"Starting Invidious race for: {yt_id}")
-            tasks = [fetch_invidious_stream(yt_id, inst) for inst in INVIDIOUS_INSTANCES]
-            results = await asyncio.gather(*tasks)
-            found_res = next((r for r in results if r), None)
-            
-            if found_res:
-                # Duration Guard
-                if title and artist and duration_total:
-                    try:
-                        dt = float(duration_total)
-                        st = float(found_res.get('duration', 0))
-                        if st > 0 and abs(dt - st) > 60:
-                            found_res = None
-                    except: pass
+            async with httpx.AsyncClient(follow_redirects=True) as client:
+                tasks = [fetch_invidious_stream(client, inst, yt_id) for inst in INVIDIOUS_INSTANCES]
+                # Race: Wait for first non-None result
+                found_res = None
+                for completed_task in asyncio.as_completed(tasks):
+                    res = await completed_task
+                    if res:
+                        # Duration Guard
+                        if title and artist and duration_total:
+                            if not is_duration_match(duration_total, res.get('duration')):
+                                continue
+                        
+                        found_res = res
+                        break
                 
                 if found_res:
                     thumb = found_res.get('thumbnail') or ""
