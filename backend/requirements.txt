@@ -8,3 +8,4 @@ httpx==0.24.1
 youtube-search-python
 innertube
 pytubefix
+ytmusicapi

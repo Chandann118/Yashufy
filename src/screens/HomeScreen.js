@@ -105,7 +105,7 @@ export default function HomeScreen({ navigation }) {
 
         try {
             setFetchingTrackId(item.id);
-            const streamResponse = await fetch(`${backendUrl}/stream?id=${item.id}&title=${encodeURIComponent(item.title)}&artist=${encodeURIComponent(item.artist)}`, {
+            const streamResponse = await fetch(`${backendUrl}/stream?id=${item.id}&title=${encodeURIComponent(item.title)}&artist=${encodeURIComponent(item.artist)}&duration_total=${item.duration || ''}`, {
                 headers: { 'Bypass-Tunnel-Reminder': 'true' }
             });
 

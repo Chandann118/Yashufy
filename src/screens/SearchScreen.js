@@ -13,6 +13,7 @@ export default function SearchScreen({ navigation }) {
     const [query, setQuery] = useState('');
     const [results, setResults] = useState([]);
     const [loading, setLoading] = useState(false);
+    const [fetchingTrackId, setFetchingTrackId] = useState(null);
     const dispatch = useDispatch();
 
     const handleSearch = async () => {
@@ -32,10 +33,16 @@ export default function SearchScreen({ navigation }) {
     };
 
     const handlePlay = async (item) => {
+        if (fetchingTrackId) return;
+
         try {
-            const streamResponse = await fetch(`${backendUrl}/stream?id=${item.id}&title=${encodeURIComponent(item.title)}&artist=${encodeURIComponent(item.artist)}`, {
+            setFetchingTrackId(item.id);
+            const streamResponse = await fetch(`${backendUrl}/stream?id=${item.id}&title=${encodeURIComponent(item.title)}&artist=${encodeURIComponent(item.artist)}&duration_total=${item.duration || ''}`, {
                 headers: { 'Bypass-Tunnel-Reminder': 'true' }
             });
+
+            if (!streamResponse.ok) throw new Error('Failed to fetch stream');
+
             const streamData = await streamResponse.json();
 
             const track = {
@@ -44,7 +51,7 @@ export default function SearchScreen({ navigation }) {
                 title: item.title,
                 artist: item.artist,
                 artwork: streamData.thumbnail || item.thumbnail,
-                duration: item.duration,
+                duration: item.duration || streamData.duration,
             };
 
             dispatch(setTrack(track));
@@ -56,10 +63,13 @@ export default function SearchScreen({ navigation }) {
                 }
             });
 
-            navigation.navigate('Tabs', { screen: 'Home' }); // Modified to avoid nested nav issues
+            navigation.navigate('Tabs', { screen: 'Home' });
             navigation.navigate('Player');
         } catch (error) {
             console.error('Playback error:', error);
+            alert("Streaming service is slow or busy. Please try another song.");
+        } finally {
+            setFetchingTrackId(null);
         }
     };
 

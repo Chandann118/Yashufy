@@ -10,6 +10,9 @@ import time
 import httpx
 from typing import List, Optional
 from youtubesearchpython import VideosSearch
+from ytmusicapi import YTMusic
+
+ytmusic = YTMusic()
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -264,6 +267,27 @@ async def home_content():
         logger.error(f"Home Content Error: {str(e)}")
         raise HTTPException(status_code=500, detail="Home content failed")
 
+def is_duration_match(meta_duration, stream_duration):
+    """Verify if the audio duration matches the metadata within a reasonable threshold."""
+    if not meta_duration or not stream_duration:
+        return True # Can't verify, trust but trace
+    
+    try:
+        # Convert both to float
+        m_dur = float(meta_duration)
+        s_dur = float(stream_duration)
+        
+        # Threshold: 15% or 30 seconds, whichever is smaller
+        threshold = min(m_dur * 0.15, 30.0)
+        diff = abs(m_dur - s_dur)
+        
+        if diff <= threshold:
+            return True
+        logger.warning(f"Duration mismatch: Meta={m_dur}s vs Stream={s_dur}s (Diff={diff}s)")
+        return False
+    except:
+        return True
+
 
 async def fetch_invidious_stream(client: httpx.AsyncClient, instance: str, video_id: str):
     """Helper to fetch stream from a single Invidious instance."""
@@ -297,7 +321,8 @@ async def fetch_invidious_stream(client: httpx.AsyncClient, instance: str, video
 async def get_stream(
     id: str = Query(...), 
     title: Optional[str] = Query(None), 
-    artist: Optional[str] = Query(None)
+    artist: Optional[str] = Query(None),
+    duration_total: Optional[float] = Query(None)
 ):
     """
     Optimized streaming logic with parallel lookups and caching.
@@ -312,16 +337,24 @@ async def get_stream(
         is_saavn = True
 
     if is_saavn and title and artist:
-        logger.info(f"Resolving Saavn track to YouTube: {title} - {artist}")
+        logger.info(f"Resolving Saavn track via YTMusic: {title} - {artist}")
         try:
-            search_query = f"{title} {artist} official audio"
-            search_engine = VideosSearch(search_query, limit=1)
-            yt_res = search_engine.result().get('result', [])
+            # Use YTMusic for pinpoint accuracy (pinpoint 'songs' specifically)
+            search_query = f"{title} {artist}"
+            yt_res = ytmusic.search(search_query, filter="songs")
             if yt_res:
-                yt_id = yt_res[0].get('id')
-                logger.info(f"Resolved to YT ID: {yt_id}")
+                official_track = yt_res[0]
+                yt_id = official_track.get('videoId')
+                logger.info(f"YTMusic Resolved to: {yt_id} ({official_track.get('title')})")
         except Exception as e:
-            logger.warning(f"Metadata resolution failed: {str(e)}")
+            logger.warning(f"YTMusic resolution failed: {str(e)}. Falling back to global search.")
+            try:
+                search_query_fallback = f"{title} {artist} official audio"
+                search_engine = VideosSearch(search_query_fallback, limit=1)
+                vt_res = search_engine.result().get('result', [])
+                if vt_res:
+                    yt_id = vt_res[0].get('id')
+            except: pass
 
     # 1. Try Invidious (Parallel Lookups) with resolved yt_id
     instances = [
@@ -357,11 +390,16 @@ async def get_stream(
                     logger.warning(f"Race task error: {str(te)}")
                     pass
             if found_res and isinstance(found_res, dict):
-                logger.info(f"SUCCESS: {found_res.get('source')} (Race Winner)")
-                thumb = found_res.get('thumbnail')
-                if thumb and isinstance(thumb, str) and thumb.startswith('http:'):
-                    found_res['thumbnail'] = thumb.replace('http:', 'https:')
-                return found_res
+                # Verify duration if metadata provides it
+                if title and artist and not is_duration_match(duration_total, found_res.get('duration')):
+                    logger.warning("Invidious race winner failed duration guard. Continuing...")
+                    found_res = None
+                else:
+                    logger.info(f"SUCCESS: {found_res.get('source')} (Race Winner)")
+                    thumb = found_res.get('thumbnail')
+                    if thumb and isinstance(thumb, str) and thumb.startswith('http:'):
+                        found_res['thumbnail'] = thumb.replace('http:', 'https:')
+                    return found_res
             tasks = list(pending)
             if not tasks: break
 
@@ -371,7 +409,7 @@ async def get_stream(
         from pytubefix import YouTube
         yt = YouTube(f"https://www.youtube.com/watch?v={yt_id}")
         audio_stream = yt.streams.filter(only_audio=True).first()
-        if audio_stream:
+        if audio_stream and is_duration_match(duration_total, yt.length):
             logger.info("SUCCESS: pytubefix")
             thumb = yt.thumbnail_url
             if thumb and thumb.startswith('http:'): thumb = thumb.replace('http:', 'https:')
