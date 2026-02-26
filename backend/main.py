@@ -15,6 +15,9 @@ from youtubesearchpython import VideosSearch
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("VortexMusic")
 
+# Global cache for SoundCloud Client ID
+SC_CID_CACHE = {"cid": None, "expiry": 0.0}
+
 app = FastAPI(title="Vortex Music Backend")
 
 app.add_middleware(
@@ -106,7 +109,7 @@ class SaavnAPI:
                 data = resp.json()
                 # Return first chart
                 if data:
-                    chart_id = data[0].get('listid')
+                    chart_id = data[0].get('id')
                     return await self.get_playlist(chart_id)
         return []
 
@@ -135,14 +138,95 @@ def format_search_result(result):
         'duration': result.get('duration'),
         'url': f"https://www.youtube.com/watch?v={result.get('id')}",
     }
+class AudioDBAPI:
+    """Helper for TheAudioDB for artist bios and images."""
+    BASE_URL = "https://www.theaudiodb.com/api/v1/json/1" # Public test key
+
+    async def get_artist_info(self, name: str):
+        try:
+            async with httpx.AsyncClient() as client:
+                resp = await client.get(f"{self.BASE_URL}/search.php", params={'s': name}, timeout=5.0)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    artists = data.get('artists')
+                    if artists:
+                        artist = artists[0]
+                        return {
+                            'bio': artist.get('strBiographyEN'),
+                            'banner': artist.get('strArtistBanner'),
+                            'fanart': artist.get('strArtistFanart'),
+                            'logo': artist.get('strArtistLogo'),
+                            'style': artist.get('strStyle'),
+                            'genre': artist.get('strGenre'),
+                            'country': artist.get('strCountry')
+                        }
+        except Exception as e:
+            logger.warning(f"AudioDB Error: {str(e)}")
+        return None
+
+class DeezerAPI:
+    """Helper for Deezer Search & Metadata."""
+    BASE_URL = "https://api.deezer.com"
+
+    async def search(self, query: str):
+        try:
+            async with httpx.AsyncClient() as client:
+                resp = await client.get(f"{self.BASE_URL}/search", params={'q': query}, timeout=5.0)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    return [{
+                        'id': str(track.get('id')),
+                        'type': 'deezer',
+                        'title': track.get('title'),
+                        'artist': track.get('artist', {}).get('name'),
+                        'thumbnail': track.get('album', {}).get('cover_xl') or track.get('album', {}).get('cover_medium'),
+                        'duration': track.get('duration'),
+                        'album': track.get('album', {}).get('title'),
+                        'source': 'Deezer'
+                    } for track in data.get('data', [])[:5]]
+        except Exception as e:
+            logger.warning(f"Deezer Error: {str(e)}")
+        return []
+
+saavn = SaavnAPI()
+audiodb = AudioDBAPI()
+deezer = DeezerAPI()
+
+@app.get("/artist/{name}")
+async def get_artist(name: str):
+    info = await audiodb.get_artist_info(name)
+    if not info:
+        raise HTTPException(status_code=404, detail="Artist info not found")
+    return info
 
 @app.get("/search")
 async def search(q: str = Query(...)):
     try:
-        # Primary: JioSaavn
-        results = await saavn.search(q)
-        if results:
-            return results
+        # Parallel Search: Saavn + Deezer
+        results_saavn: List = []
+        results_deezer: List = []
+        
+        try:
+            results_saavn, results_deezer = await asyncio.gather(
+                saavn.search(q),
+                deezer.search(q),
+                return_exceptions=True
+            )
+            # Handle potential exceptions from gather
+            if isinstance(results_saavn, Exception): results_saavn = []
+            if isinstance(results_deezer, Exception): results_deezer = []
+        except Exception as ge:
+            logger.warning(f"Gather error: {str(ge)}")
+
+        # Merge results, prioritizing Saavn for Indian content (first 10), then Deezer
+        final_merged = []
+        if isinstance(results_saavn, list):
+            final_merged.extend(list(results_saavn)[:10])
+        if isinstance(results_deezer, list):
+            final_merged.extend(list(results_deezer))
+            
+        if final_merged:
+            return final_merged
             
         # Fallback: YouTube Search
         search_engine = VideosSearch(q, limit=15)
@@ -150,7 +234,6 @@ async def search(q: str = Query(...)):
         return [format_search_result(v) for v in yt_results]
     except Exception as e:
         logger.error(f"Search Error: {str(e)}")
-        # Ultimate fallback
         return []
 
 @app.get("/trending")
@@ -181,8 +264,6 @@ async def home_content():
         logger.error(f"Home Content Error: {str(e)}")
         raise HTTPException(status_code=500, detail="Home content failed")
 
-# Global cache for SoundCloud Client ID
-SC_CID_CACHE = {"cid": None, "expiry": 0.0}
 
 async def fetch_invidious_stream(client: httpx.AsyncClient, instance: str, video_id: str):
     """Helper to fetch stream from a single Invidious instance."""
@@ -271,12 +352,14 @@ async def get_stream(
                         for p in pending:
                             p.cancel()
                         break
-                except Exception:
+                except Exception as te:
+                    logger.warning(f"Race task error: {str(te)}")
                     pass
-            if found_res:
-                logger.info(f"SUCCESS: {found_res['source']} (Race Winner)")
-                if found_res.get('thumbnail') and found_res['thumbnail'].startswith('http:'):
-                    found_res['thumbnail'] = found_res['thumbnail'].replace('http:', 'https:')
+            if found_res and isinstance(found_res, dict):
+                logger.info(f"SUCCESS: {found_res.get('source')} (Race Winner)")
+                thumb = found_res.get('thumbnail')
+                if thumb and isinstance(thumb, str) and thumb.startswith('http:'):
+                    found_res['thumbnail'] = thumb.replace('http:', 'https:')
                 return found_res
             tasks = list(pending)
             if not tasks: break

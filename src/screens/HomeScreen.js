@@ -36,10 +36,30 @@ const SongCard = ({ title, artist, image, onPress }) => (
     </TouchableOpacity>
 );
 
+const SpotlightCard = ({ artistInfo, loading }) => {
+    if (loading) return null;
+    if (!artistInfo) return null;
+
+    return (
+        <View className="mb-8 rounded-2xl overflow-hidden bg-vortex-surface border border-vortex-surface">
+            <Image source={{ uri: artistInfo.fanart || artistInfo.banner }} className="w-full h-48 opacity-70" />
+            <View className="p-4 absolute bottom-0 left-0 right-0 bg-black/40">
+                <View className="flex-row items-center mb-1">
+                    <Star size={16} color="#FF9933" />
+                    <Text className="text-vortex-saffron text-xs font-bold ml-1 uppercase tracking-tighter">Artist Spotlight</Text>
+                </View>
+                <Text className="text-white text-2xl font-black mb-1">{artistInfo.artistName}</Text>
+                <Text className="text-vortex-textSecondary text-xs leading-4" numberOfLines={2}>{artistInfo.bio}</Text>
+            </View>
+        </View>
+    );
+};
+
 export default function HomeScreen({ navigation }) {
     const [greeting, setGreeting] = useState('Good evening');
     const [trending, setTrending] = useState([]);
     const [recent, setRecent] = useState([]);
+    const [spotlight, setSpotlight] = useState(null);
     const [loading, setLoading] = useState(true);
 
     const backendUrl = useSelector(state => state.settings.backendUrl);
@@ -62,6 +82,16 @@ export default function HomeScreen({ navigation }) {
             const data = await response.json();
             setTrending(data.trending || []);
             setRecent(data.recently_played || []);
+
+            // Fetch spotlight for a random trending artist or a fallback
+            const artistToSpotlight = data.trending?.[0]?.artist || "Arijit Singh";
+            const artistRes = await fetch(`${backendUrl}/artist/${encodeURIComponent(artistToSpotlight)}`, {
+                headers: { 'Bypass-Tunnel-Reminder': 'true' }
+            });
+            if (artistRes.ok) {
+                const artistData = await artistRes.json();
+                setSpotlight({ ...artistData, artistName: artistToSpotlight });
+            }
         } catch (error) {
             console.error('Home fetch error:', error);
         } finally {
@@ -114,6 +144,8 @@ export default function HomeScreen({ navigation }) {
                         <Zap size={24} color="#FF9933" />
                     </TouchableOpacity>
                 </View>
+
+                <SpotlightCard artistInfo={spotlight} loading={loading} />
 
                 <SectionHeader title="Recently Played" icon={Clock} color="#FF9933" />
                 <FlatList

@@ -98,10 +98,22 @@ export default function SearchScreen({ navigation }) {
                             className="flex-row items-center mb-6"
                             onPress={() => handlePlay(item)}
                         >
-                            <Image source={{ uri: item.thumbnail }} className="w-16 h-16 rounded-lg" />
+                            <View className="relative">
+                                <Image source={{ uri: item.thumbnail }} className="w-16 h-16 rounded-lg" />
+                                {item.source && (
+                                    <View className="absolute -bottom-1 -right-1 bg-vortex-saffron px-1.5 py-0.5 rounded-md">
+                                        <Text className="text-black text-[8px] font-bold uppercase">{item.source}</Text>
+                                    </View>
+                                )}
+                            </View>
                             <View className="flex-1 ml-4 justify-center">
                                 <Text className="text-white font-semibold text-lg" numberOfLines={1}>{item.title}</Text>
-                                <Text className="text-vortex-textSecondary text-sm" numberOfLines={1}>{item.artist}</Text>
+                                <View className="flex-row items-center">
+                                    <Text className="text-vortex-textSecondary text-sm" numberOfLines={1}>{item.artist}</Text>
+                                    {item.duration && (
+                                        <Text className="text-vortex-textSecondary text-xs ml-2">• {Math.floor(item.duration / 60)}:{(item.duration % 60).toString().padStart(2, '0')}</Text>
+                                    )}
+                                </View>
                             </View>
                             <TouchableOpacity className="p-2">
                                 <Play size={24} color="#FF9933" />
