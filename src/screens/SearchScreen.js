@@ -43,7 +43,7 @@ export default function SearchScreen({ navigation }) {
                 url: streamData.stream_url,
                 title: item.title,
                 artist: item.artist,
-                artwork: item.thumbnail,
+                artwork: streamData.thumbnail || item.thumbnail,
                 duration: item.duration,
             };
 

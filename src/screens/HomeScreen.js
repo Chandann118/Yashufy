@@ -81,7 +81,7 @@ export default function HomeScreen({ navigation }) {
                 url: streamData.stream_url,
                 title: item.title,
                 artist: item.artist,
-                artwork: item.thumbnail,
+                artwork: streamData.thumbnail || item.thumbnail,
                 duration: item.duration,
             };
 
