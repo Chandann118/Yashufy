@@ -4,7 +4,7 @@ import { Image } from 'expo-image';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Search, Play, Heart, MoreVertical } from 'lucide-react-native';
 import { useDispatch } from 'react-redux';
-import { setTrack, setPlaying } from '../store/playerSlice';
+import { setTrack, setPlaying, setQueue, setCurrentIndex } from '../store/playerSlice';
 import { playTrack } from '../services/audioService';
 import { useSelector } from 'react-redux';
 

@@ -59,8 +59,9 @@ class SaavnAPI:
     
     @staticmethod
     def _format_song(song):
-        # Upgrade image to 500x500
-        image = song.get('image', '').replace('150x150', '500x500')
+        # Upgrade image to 500x500. Support 'image' or 'thumbnail' keys.
+        image = song.get('image') or song.get('thumbnail') or ''
+        image = image.replace('150x150', '500x500').replace('50x50', '500x500')
         if image.startswith('http:'): image = image.replace('http:', 'https:')
         
         # Format duration
@@ -322,48 +323,21 @@ async def get_stream(
     id: str = Query(...), 
     title: Optional[str] = Query(None), 
     artist: Optional[str] = Query(None),
-    duration_total: Optional[float] = Query(None)
+    duration_total: Optional[str] = Query(None) # Keep as string to avoid parsing errors
 ):
     """
     Optimized streaming logic with parallel lookups and caching.
     Priority: Invidious (Parallel) -> pytubefix -> SoundCloud (HLS) -> yt-dlp
     """
-    # If ID looks like Saavn or title/artist are provided, resolve to YT ID first
-    yt_id = id
-    is_saavn = len(id) != 11 or (id.isalnum() and not any(c.isupper() for c in id) and not any(c.islower() for c in id)) # Very rough check
-    
-    # Better Saavn check: Saavn IDs are often different lengths or alphanumeric
-    if (len(id) < 11 or len(id) > 12) and title and artist:
-        is_saavn = True
-
-    if is_saavn and title and artist:
-        logger.info(f"Resolving Saavn track via YTMusic: {title} - {artist}")
+    # Resolve Saavn/Other non-YT IDs with YTMusic pinpoint
+    yt_id = id # Initialize yt_id with the provided id
+    if (len(id) != 11 or id.startswith('saavn_') or id.startswith('deezer_')) and title and artist:
+        logger.info(f"Resolving metadata via YTMusic: {title} - {artist}")
         try:
-            # Use YTMusic for pinpoint accuracy (pinpoint 'songs' specifically)
-            search_query = f"{title} {artist}"
-            yt_res = ytmusic.search(search_query, filter="songs")
+            from ytmusicapi import YTMusic
+            ytm = YTMusic()
+            yt_res = ytm.search(f"{title} {artist}", filter="songs", limit=1)
             if yt_res:
-                official_track = yt_res[0]
-                yt_id = official_track.get('videoId')
-                logger.info(f"YTMusic Resolved to: {yt_id} ({official_track.get('title')})")
-        except Exception as e:
-            logger.warning(f"YTMusic resolution failed: {str(e)}. Falling back to global search.")
-            try:
-                search_query_fallback = f"{title} {artist} official audio"
-                search_engine = VideosSearch(search_query_fallback, limit=1)
-                vt_res = search_engine.result().get('result', [])
-                if vt_res:
-                    yt_id = vt_res[0].get('id')
-            except: pass
-
-    # 1. Try Invidious (Parallel Lookups) with resolved yt_id
-    instances = [
-        "https://inv.nadeko.net",
-        "https://inv.zzls.xyz",
-        "https://iv.datura.network",
-        "https://invidious.projectsegfau.lt",
-        "https://yewtu.be",
-        "https://inv.tux.pizza",
         "https://invidious.nerdvpn.de",
         "https://iv.melmac.space",
         "https://inv.tuep.pizza"
@@ -426,7 +400,56 @@ async def get_stream(
     except Exception as py_e:
         logger.warning(f"pytubefix failed: {str(py_e)}")
 
-    # 3. Last resort: yt-dlp
+    # 3. Fallback: Search same title on SoundCloud
+    logger.info("Falling back to SoundCloud as safety net")
+    try:
+        search_query = f"{title} {artist}" if title and artist else title or "song"
+        
+        # SoundCloud CID extraction with simple caching
+        global SC_CID_CACHE
+        cid = SC_CID_CACHE.get("cid")
+        if not cid or time.time() > SC_CID_CACHE.get("expiry", 0):
+            rsc = requests.get('https://soundcloud.com', headers={'User-Agent': 'Mozilla/5.0'}, timeout=5)
+            js_matches = re.findall(r'src=\"(https://a-v2\.sndcdn\.com/assets/[^\"]+\.js)\"', rsc.text)
+            for js_url in js_matches:
+                rj = requests.get(js_url, timeout=5)
+                cid_match = re.search(r'client_id:\"([a-zA-Z0-9]{32})\"', rj.text)
+                if cid_match:
+                    cid = cid_match.group(1)
+                    SC_CID_CACHE = {"cid": cid, "expiry": time.time() + 3600}
+                    break
+        
+        if cid:
+            search_url = f'https://api-v2.soundcloud.com/search/tracks?q={search_query}&client_id={cid}&limit=1'
+            rss = requests.get(search_url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=5)
+            if rss.status_code == 200:
+                results = rss.json().get('collection', [])
+                if results:
+                    track = results[0]
+                    transcodings = track.get('media', {}).get('transcodings', [])
+                    # EXTREMELY IMPORTANT: Only use HLS to avoid the 1:45 cutoff
+                    best = next((t for t in transcodings if t.get('format', {}).get('protocol') == 'hls'), None)
+                    
+                    if best:
+                        ru = requests.get(best['url'] + f'?client_id={cid}', headers={'User-Agent': 'Mozilla/5.0'}, timeout=5)
+                        if ru.status_code == 200:
+                            stream_url = ru.json()['url']
+                            logger.info(f"SUCCESS: SoundCloud (HLS Safety)")
+                            thumb = track.get('artwork_url')
+                            if thumb: thumb = thumb.replace('-large', '-t500x500')
+                            if thumb and thumb.startswith('http:'): thumb = thumb.replace('http:', 'https:')
+                            return {
+                                'stream_url': stream_url,
+                                'title': track.get('title'),
+                                'thumbnail': thumb or 'https://images.unsplash.com/photo-1614613535308-eb5fbd3d2c17?w=500',
+                                'artist': track.get('user', {}).get('username'),
+                                'duration': track.get('duration') // 1000,
+                                'source': 'SoundCloud'
+                            }
+    except Exception as sce:
+        logger.warning(f"SoundCloud safety fallback failed: {str(sce)}")
+
+    # 4. Last resort: yt-dlp
     logger.info("Falling back to yt-dlp")
     try:
         with yt_dlp.YoutubeDL(YDL_OPTIONS) as ydl:

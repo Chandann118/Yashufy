@@ -4,7 +4,7 @@ import { Image } from 'expo-image';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Play, Heart, Star, TrendingUp, Zap, Clock, Disc } from 'lucide-react-native';
 import { useDispatch, useSelector } from 'react-redux';
-import { setTrack, setPlaying } from '../store/playerSlice';
+import { setTrack, setPlaying, setQueue, setCurrentIndex } from '../store/playerSlice';
 import { playTrack } from '../services/audioService';
 
 const CategoryCard = ({ title, color }) => (
