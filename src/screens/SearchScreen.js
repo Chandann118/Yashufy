@@ -32,11 +32,14 @@ export default function SearchScreen({ navigation }) {
         }
     };
 
-    const handlePlay = async (item) => {
+    const handlePlay = async (item, index, customQueue) => {
         if (fetchingTrackId) return;
 
         try {
             setFetchingTrackId(item.id);
+            const queueToUse = customQueue || results;
+            const itemIndex = index !== undefined ? index : queueToUse.findIndex(i => i.id === item.id);
+
             const streamResponse = await fetch(`${backendUrl}/stream?id=${item.id}&title=${encodeURIComponent(item.title)}&artist=${encodeURIComponent(item.artist)}&duration_total=${item.duration || ''}`, {
                 headers: { 'Bypass-Tunnel-Reminder': 'true' }
             });
@@ -55,6 +58,8 @@ export default function SearchScreen({ navigation }) {
             };
 
             dispatch(setTrack(track));
+            dispatch(setQueue(queueToUse));
+            dispatch(setCurrentIndex(itemIndex));
             dispatch(setPlaying(true));
 
             await playTrack(track, (status) => {
@@ -103,10 +108,10 @@ export default function SearchScreen({ navigation }) {
                     data={results}
                     keyExtractor={(item) => item.id}
                     showsVerticalScrollIndicator={false}
-                    renderItem={({ item }) => (
+                    renderItem={({ item, index }) => (
                         <TouchableOpacity
                             className="flex-row items-center mb-6"
-                            onPress={() => handlePlay(item)}
+                            onPress={() => handlePlay(item, index, results)}
                         >
                             <View className="relative">
                                 <Image source={{ uri: item.thumbnail }} className="w-16 h-16 rounded-lg" />

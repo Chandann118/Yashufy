@@ -52,4 +52,10 @@ export const togglePlayback = async (isPlaying) => {
     }
 };
 
+export const seekTo = async (positionMillis) => {
+    if (playbackInstance) {
+        await playbackInstance.setPositionAsync(positionMillis);
+    }
+};
+
 export const getPlaybackInstance = () => playbackInstance;

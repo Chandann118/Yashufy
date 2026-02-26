@@ -364,10 +364,12 @@ async def get_stream(
         "https://invidious.projectsegfau.lt",
         "https://yewtu.be",
         "https://inv.tux.pizza",
-        "https://invidious.nerdvpn.de"
+        "https://invidious.nerdvpn.de",
+        "https://iv.melmac.space",
+        "https://inv.tuep.pizza"
     ]
     random.shuffle(instances)
-    top_instances = instances[0:4]
+    top_instances = instances[0:5]
 
     logger.info(f"Racing Invidious parallel lookups for {yt_id}: {top_instances}")
     async with httpx.AsyncClient(follow_redirects=True) as client:
@@ -424,69 +426,7 @@ async def get_stream(
     except Exception as py_e:
         logger.warning(f"pytubefix failed: {str(py_e)}")
 
-    # 3. Fallback: Search same title on SoundCloud
-    logger.info("Falling back to SoundCloud")
-    try:
-        search_query = f"{title} {artist}" if title and artist else title or "song"
-        
-        if search_query == "song":
-            try:
-                from youtubesearchpython import Video
-                vd = Video.get(f"https://www.youtube.com/watch?v={yt_id}")
-                if vd and vd.get('title'):
-                    search_query = vd.get('title')
-            except:
-                pass
-
-        # SoundCloud CID extraction with simple caching
-        global SC_CID_CACHE
-        cid = SC_CID_CACHE.get("cid")
-        if not cid or time.time() > SC_CID_CACHE.get("expiry", 0):
-            logger.info("Extracting new SoundCloud Client ID")
-            rsc = requests.get('https://soundcloud.com', headers={'User-Agent': 'Mozilla/5.0'}, timeout=5)
-            js_matches = re.findall(r'src=\"(https://a-v2\.sndcdn\.com/assets/[^\"]+\.js)\"', rsc.text)
-            for js_url in js_matches:
-                rj = requests.get(js_url, timeout=5)
-                cid_match = re.search(r'client_id:\"([a-zA-Z0-9]{32})\"', rj.text)
-                if cid_match:
-                    cid = cid_match.group(1)
-                    SC_CID_CACHE = {"cid": cid, "expiry": time.time() + 3600} # Cache for 1 hour
-                    break
-        
-        if cid:
-            search_url = f'https://api-v2.soundcloud.com/search/tracks?q={search_query}&client_id={cid}&limit=1'
-            rss = requests.get(search_url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=5)
-            if rss.status_code == 200:
-                results = rss.json().get('collection', [])
-                if results:
-                    track = results[0]
-                    transcodings = track.get('media', {}).get('transcodings', [])
-                    
-                    # FORCE HLS: Progressive streams cut off at 1:45 because of SoundCloud's IP-range blocking
-                    best = next((t for t in transcodings if t.get('format', {}).get('protocol') == 'hls'), None)
-                    
-                    if best:
-                        ru = requests.get(best['url'] + f'?client_id={cid}', headers={'User-Agent': 'Mozilla/5.0'}, timeout=5)
-                        if ru.status_code == 200:
-                            stream_url = ru.json()['url']
-                            logger.info(f"SUCCESS: SoundCloud (HLS Forced)")
-                            thumb = track.get('artwork_url')
-                            if thumb: thumb = thumb.replace('-large', '-t500x500') # Better quality
-                            if thumb and thumb.startswith('http:'): thumb = thumb.replace('http:', 'https:')
-                            return {
-                                'stream_url': stream_url,
-                                'title': track.get('title'),
-                                'thumbnail': thumb or 'https://images.unsplash.com/photo-1614613535308-eb5fbd3d2c17?w=500',
-                                'artist': track.get('user', {}).get('username'),
-                                'duration': track.get('duration') // 1000,
-                                'source': 'SoundCloud'
-                            }
-                    else:
-                        logger.warning("No HLS transcoding found for SoundCloud track. Skipping to next fallback.")
-    except Exception as sce:
-        logger.warning(f"SoundCloud fallback failed: {str(sce)}")
-
-    # 4. Last resort: yt-dlp
+    # 3. Last resort: yt-dlp
     logger.info("Falling back to yt-dlp")
     try:
         with yt_dlp.YoutubeDL(YDL_OPTIONS) as ydl:

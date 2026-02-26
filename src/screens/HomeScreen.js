@@ -100,11 +100,14 @@ export default function HomeScreen({ navigation }) {
         }
     };
 
-    const handlePlay = async (item) => {
+    const handlePlay = async (item, index, customQueue) => {
         if (fetchingTrackId) return; // Prevent multiple clicks
 
         try {
             setFetchingTrackId(item.id);
+            const queueToUse = customQueue || trending;
+            const itemIndex = index !== undefined ? index : queueToUse.findIndex(i => i.id === item.id);
+
             const streamResponse = await fetch(`${backendUrl}/stream?id=${item.id}&title=${encodeURIComponent(item.title)}&artist=${encodeURIComponent(item.artist)}&duration_total=${item.duration || ''}`, {
                 headers: { 'Bypass-Tunnel-Reminder': 'true' }
             });
@@ -123,6 +126,8 @@ export default function HomeScreen({ navigation }) {
             };
 
             dispatch(setTrack(track));
+            dispatch(setQueue(queueToUse));
+            dispatch(setCurrentIndex(itemIndex));
             dispatch(setPlaying(true));
 
             await playTrack(track, (status) => {
@@ -163,12 +168,12 @@ export default function HomeScreen({ navigation }) {
                     showsHorizontalScrollIndicator={false}
                     data={recent}
                     keyExtractor={(item) => item.id}
-                    renderItem={({ item }) => (
+                    renderItem={({ item, index }) => (
                         <SongCard
                             title={item.title}
                             artist={item.artist}
                             image={item.thumbnail}
-                            onPress={() => handlePlay(item)}
+                            onPress={() => handlePlay(item, index, recent)}
                         />
                     )}
                     ListEmptyComponent={<Text className="text-vortex-textSecondary ml-4">No recent songs</Text>}
@@ -190,12 +195,12 @@ export default function HomeScreen({ navigation }) {
                     showsHorizontalScrollIndicator={false}
                     data={trending}
                     keyExtractor={(item) => item.id}
-                    renderItem={({ item }) => (
+                    renderItem={({ item, index }) => (
                         <SongCard
                             title={item.title}
                             artist={item.artist}
                             image={item.thumbnail}
-                            onPress={() => handlePlay(item)}
+                            onPress={() => handlePlay(item, index, trending)}
                         />
                     )}
                     ListEmptyComponent={<Text className="text-vortex-textSecondary ml-4">Loading trending...</Text>}

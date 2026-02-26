@@ -6,8 +6,9 @@ const initialState = {
     queue: [],
     playbackState: 'idle',
     volume: 1.0,
-    repeatMode: 'off', // off, one, all
+    repeatMode: 'off', // off, all, one
     isShuffle: false,
+    currentIndex: -1,
 };
 
 const playerSlice = createSlice({
@@ -32,15 +33,20 @@ const playerSlice = createSlice({
         toggleShuffle: (state) => {
             state.isShuffle = !state.isShuffle;
         },
-        setRepeatMode: (state, action) => {
-            state.repeatMode = action.payload;
+        toggleRepeatMode: (state) => {
+            const modes = ['off', 'all', 'one'];
+            const currentIndex = modes.indexOf(state.repeatMode);
+            state.repeatMode = modes[(currentIndex + 1) % modes.length];
         },
+        setCurrentIndex: (state, action) => {
+            state.currentIndex = action.payload;
+        }
     },
 });
 
 export const {
     setTrack, setPlaying, setQueue, setPlaybackState,
-    setVolume, toggleShuffle, setRepeatMode
+    setVolume, toggleShuffle, toggleRepeatMode, setCurrentIndex
 } = playerSlice.actions;
 
 export default playerSlice.reducer;
