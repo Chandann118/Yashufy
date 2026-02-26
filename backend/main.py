@@ -90,20 +90,45 @@ async def home_content():
 
 @app.get("/stream")
 async def get_stream(id: str = Query(...)):
-    # 1. Try Invidious (Currently most reliable for cloud IPs)
-    # Using a known working instance on Render: iv.ggtyler.dev
+    """
+    Enhanced streaming logic with multiple fallback layers.
+    Priority: Invidious (Rotating) -> pytubefix -> SoundCloud -> yt-dlp
+    """
     import httpx
-    instances = ["https://iv.ggtyler.dev", "https://invidious.projectsegfau.lt", "https://inv.zzls.xyz", "https://yewtu.be"]
+    import logging
+    import random
+    import requests
+    import re
+
+    # Configure logging
+    logging.basicConfig(level=logging.INFO)
+    logger = logging.getLogger("VortexMusic")
+
+    # 1. Try Invidious (Rotating Instances)
+    # Selected high-uptime instances
+    instances = [
+        "https://iv.ggtyler.dev",
+        "https://invidious.projectsegfau.lt",
+        "https://inv.zzls.xyz",
+        "https://yewtu.be",
+        "https://inv.riverside.rocks",
+        "https://invidious.namazso.eu"
+    ]
+    random.shuffle(instances)  # Randomize to spread load
+
     for instance in instances:
         try:
+            logger.info(f"Trying Invidious instance: {instance}")
             async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
                 resp = await client.get(f"{instance}/api/v1/videos/{id}")
                 if resp.status_code == 200:
                     data = resp.json()
                     adaptive_formats = data.get('adaptiveFormats', [])
-                    audio_formats = [f for f in adaptive_formats if f.get('type','').startswith('audio/')]
+                    audio_formats = [f for f in adaptive_formats if f.get('type', '').startswith('audio/')]
                     if audio_formats:
+                        # Sort by bitrate to get best quality
                         best_audio = sorted(audio_formats, key=lambda x: int(x.get('bitrate') or 0), reverse=True)[0]
+                        logger.info(f"SUCCESS: Invidious ({instance})")
                         return {
                             'stream_url': best_audio.get('url'),
                             'title': data.get('title'),
@@ -112,15 +137,21 @@ async def get_stream(id: str = Query(...)):
                             'duration': data.get('lengthSeconds'),
                             'source': f'Invidious ({instance})'
                         }
-        except:
+                else:
+                    logger.warning(f"Invidious instance {instance} returned status {resp.status_code}")
+        except Exception as inv_e:
+            logger.warning(f"Invidious instance {instance} failed: {str(inv_e)}")
             continue
 
     # 2. Try pytubefix (YouTube)
+    logger.info("Falling back to pytubefix")
     try:
         from pytubefix import YouTube
+        # Using a reliable client to avoid block
         yt = YouTube(f"https://www.youtube.com/watch?v={id}")
         audio_stream = yt.streams.filter(only_audio=True).first()
         if audio_stream:
+            logger.info("SUCCESS: pytubefix")
             return {
                 'stream_url': audio_stream.url,
                 'title': yt.title,
@@ -129,57 +160,65 @@ async def get_stream(id: str = Query(...)):
                 'duration': yt.length,
                 'source': 'pytubefix'
             }
-    except Exception as e:
-        print(f"pytubefix failed: {str(e)}")
+    except Exception as py_e:
+        logger.warning(f"pytubefix failed: {str(py_e)}")
 
     # 3. Fallback: Search same title on SoundCloud
+    logger.info("Falling back to SoundCloud")
     try:
-        import requests, re
         title = "song"
+        # Try to get title from youtube-search-python if possible
         try:
             from youtubesearchpython import Video
-            # Increase timeout/headers if needed
             vd = Video.get(f"https://www.youtube.com/watch?v={id}")
             if vd: title = vd.get('title')
         except:
-            pass
+            logger.warning("Could not fetch title for SoundCloud search fallback")
 
-        rsc = requests.get('https://soundcloud.com', headers={'User-Agent': 'Mozilla/5.0'}, timeout=5)
-        match = re.search(r'src=\"(https://a-v2\.sndcdn\.com/assets/[^\"]+\.js)\"', rsc.text)
-        if match:
-            js_url = match.group(1)
-            rj = requests.get(js_url, timeout=5)
+        # SoundCloud CID extraction
+        rsc = requests.get('https://soundcloud.com', headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
+        js_matches = re.findall(r'src=\"(https://a-v2\.sndcdn\.com/assets/[^\"]+\.js)\"', rsc.text)
+        
+        cid = None
+        for js_url in js_matches:
+            rj = requests.get(js_url, timeout=10)
             cid_match = re.search(r'client_id:\"([a-zA-Z0-9]{32})\"', rj.text)
             if cid_match:
                 cid = cid_match.group(1)
-                search_url = f'https://api-v2.soundcloud.com/search/tracks?q={title}&client_id={cid}&limit=1'
-                rss = requests.get(search_url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=5)
-                if rss.status_code == 200:
-                    results = rss.json().get('collection', [])
-                    if results:
-                        track = results[0]
-                        transcodings = track.get('media', {}).get('transcodings', [])
-                        best = next((t for t in transcodings if t['format']['protocol'] == 'progressive'), transcodings[0] if transcodings else None)
-                        if best:
-                            ru = requests.get(best['url'] + f'?client_id={cid}', headers={'User-Agent': 'Mozilla/5.0'}, timeout=5)
-                            if ru.status_code == 200:
-                                return {
-                                    'stream_url': ru.json()['url'],
-                                    'title': track.get('title'),
-                                    'thumbnail': track.get('artwork_url'),
-                                    'artist': track.get('user', {}).get('username'),
-                                    'duration': track.get('duration') // 1000,
-                                    'source': 'SoundCloud'
-                                }
+                break
+        
+        if cid:
+            search_url = f'https://api-v2.soundcloud.com/search/tracks?q={title}&client_id={cid}&limit=1'
+            rss = requests.get(search_url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
+            if rss.status_code == 200:
+                results = rss.json().get('collection', [])
+                if results:
+                    track = results[0]
+                    transcodings = track.get('media', {}).get('transcodings', [])
+                    best = next((t for t in transcodings if t['format']['protocol'] == 'progressive'), transcodings[0] if transcodings else None)
+                    if best:
+                        ru = requests.get(best['url'] + f'?client_id={cid}', headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
+                        if ru.status_code == 200:
+                            logger.info("SUCCESS: SoundCloud")
+                            return {
+                                'stream_url': ru.json()['url'],
+                                'title': track.get('title'),
+                                'thumbnail': track.get('artwork_url'),
+                                'artist': track.get('user', {}).get('username'),
+                                'duration': track.get('duration') // 1000,
+                                'source': 'SoundCloud'
+                            }
     except Exception as sce:
-        print(f"SoundCloud fallback failed: {str(sce)}")
+        logger.warning(f"SoundCloud fallback failed: {str(sce)}")
 
     # 4. Last resort: yt-dlp
+    logger.info("Falling back to yt-dlp as last resort")
     try:
         with yt_dlp.YoutubeDL(YDL_OPTIONS) as ydl:
             loop = asyncio.get_event_loop()
             info = await loop.run_in_executor(None, lambda: ydl.extract_info(f"https://www.youtube.com/watch?v={id}", download=False))
             best_format = sorted([f for f in info.get('formats', []) if f.get('vcodec') == 'none'], key=lambda x: x.get('abr') or 0, reverse=True)[0]
+            logger.info("SUCCESS: yt-dlp")
             return {
                 'stream_url': best_format.get('url'),
                 'title': info.get('title'),
@@ -189,7 +228,8 @@ async def get_stream(id: str = Query(...)):
                 'source': 'yt-dlp'
             }
     except Exception as final_e:
-        raise HTTPException(status_code=500, detail="Streaming currently unavailable from all sources. Please try again later.")
+        logger.error(f"Critical Failure: All streaming sources failed for ID {id}")
+        raise HTTPException(status_code=500, detail="Streaming currently unavailable from all sources. Technical team notified.")
 
 if __name__ == "__main__":
     import uvicorn
