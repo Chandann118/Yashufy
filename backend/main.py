@@ -42,11 +42,11 @@ app.add_middleware(
 
 @app.get("/health")
 async def health_check():
-    return {"status": "healthy", "ver": "v1.0.8-optimized"}
+    return {"status": "healthy", "ver": "v1.0.9-fixed"}
 
 @app.get("/version")
 async def get_version():
-    return {"version": "1.0.8"}
+    return {"version": "1.0.9"}
 
 YDL_OPTIONS = {
     'format': 'bestaudio/best',
