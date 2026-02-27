@@ -372,8 +372,8 @@ async def get_stream(
     # 1. Parallel Invidious Race
     if yt_id:
         try:
-            logger.info(f"Starting Invidious race for: {yt_id}")
-            async with httpx.AsyncClient(follow_redirects=True, timeout=3.0) as client:
+            # Race multiple Invidious instances with a 2.5s timeout for fast UX
+            async with httpx.AsyncClient(follow_redirects=True, timeout=2.5) as client:
                 tasks = [fetch_invidious_stream(client, inst, yt_id) for inst in INVIDIOUS_INSTANCES]
                 # Race: Wait for first non-None result within a tight window
                 found_res = None
