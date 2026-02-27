@@ -66,7 +66,8 @@ YDL_OPTIONS = {
 class SaavnAPI:
     """Helper for JioSaavn Internal API lookup."""
     BASE_URL = "https://www.jiosaavn.com/api.php"
-    
+    @staticmethod
+    def _format_song(song):
         # Upgrade image to 500x500. Support 'image' or 'thumbnail' keys.
         image = song.get('image') or song.get('thumbnail')
         if image:
