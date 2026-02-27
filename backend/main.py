@@ -47,17 +47,21 @@ LAVALINK_NODES = [
     {"host": "lava2.free-lavalink.com", "port": 443, "password": "free-lavalink", "secure": True}
 ]
 
-def proxy_thumbnail(url: str) -> str:
-    """Legacy helper, now mostly routed through internal proxy."""
+def proxy_thumbnail(url: str, base_url: str = None) -> str:
+    """Internal proxy router for maximum reliability."""
     if not url or not url.startswith('http'):
         return 'https://images.unsplash.com/photo-1614613535308-eb5fbd3d2c17?w=500'
     
-    # We will use our own backend to proxy the image for maximum reliability
-    # This avoids Referer blocks and CSP issues.
-    # The base URL will be appended dynamically or we use a relative path if possible,
-    # but for API consistency we'll use the wsrv.nl as primary and internal as ultimate.
     encoded_url = urllib.parse.quote(url, safe='')
-    return f"https://wsrv.nl/?url={encoded_url}&w=500&h=500&fit=cover&n=-1" # n=-1 disables cache-control issues
+    
+    # If we have a base_url (our own server), we use our internal proxy as the primary method
+    if base_url:
+        # Ensure base_url doesn't end with a slash for clean concatenation
+        base = str(base_url).rstrip('/')
+        return f"{base}/proxy-image?url={encoded_url}"
+    
+    # Fallback to wsrv.nl if base_url is unknown
+    return f"https://wsrv.nl/?url={encoded_url}&w=500&h=500&fit=cover&n=-1"
 
 app = FastAPI(title="Vortex Music Backend")
 
@@ -119,7 +123,7 @@ class SaavnAPI:
     """Helper for JioSaavn Internal API lookup."""
     BASE_URL = "https://www.jiosaavn.com/api.php"
     @staticmethod
-    def _format_song(song):
+    def _format_song(song, base_url: str = None):
         # Upgrade image to 500x500. Support 'image' or 'thumbnail' keys.
         image_data = song.get('image') or song.get('thumbnail')
         image = ""
@@ -146,7 +150,7 @@ class SaavnAPI:
             'type': 'saavn',
             'title': song.get('title') or song.get('song'),
             'artist': song.get('primary_artists') or song.get('singers') or 'Unknown',
-            'thumbnail': proxy_thumbnail(image),
+            'thumbnail': proxy_thumbnail(image, base_url),
             'duration': duration,
             'album': song.get('album'),
             'year': song.get('year'),
@@ -154,7 +158,7 @@ class SaavnAPI:
             'url': song.get('perma_url')
         }
 
-    async def search(self, query: str):
+    async def search(self, query: str, base_url: str = None):
         params = {
             '__call': 'autocomplete.get',
             '_format': 'json',
@@ -168,10 +172,10 @@ class SaavnAPI:
             if resp.status_code == 200:
                 data = resp.json()
                 songs = data.get('songs', {}).get('data', [])
-                return [self._format_song(s) for s in songs]
+                return [self._format_song(s, base_url) for s in songs]
         return []
 
-    async def get_charts(self):
+    async def get_charts(self, base_url: str = None):
         # Fetch Weekly Top 15 as home content
         params = {
             '__call': 'content.getCharts',
@@ -186,10 +190,10 @@ class SaavnAPI:
                 # Return first chart
                 if data:
                     chart_id = data[0].get('id')
-                    return await self.get_playlist(chart_id)
+                    return await self.get_playlist(chart_id, base_url)
         return []
 
-    async def get_playlist(self, listid: str):
+    async def get_playlist(self, listid: str, base_url: str = None):
         params = {
             '__call': 'playlist.getDetails',
             '_format': 'json',
@@ -200,16 +204,16 @@ class SaavnAPI:
             if resp.status_code == 200:
                 data = resp.json()
                 songs = data.get('songs', [])
-                return [self._format_song(s) for s in songs]
+                return [self._format_song(s, base_url) for s in songs]
         return []
 
 saavn = SaavnAPI()
 
-def format_search_result(result):
+def format_search_result(result, base_url: str = None):
     return {
         'id': result.get('id'),
         'title': result.get('title'),
-        'thumbnail': proxy_thumbnail(result.get('thumbnails', [{}])[0].get('url')),
+        'thumbnail': proxy_thumbnail(result.get('thumbnails', [{}])[0].get('url'), base_url),
         'artist': result.get('descriptionSnippet', [{}])[0].get('text') if result.get('descriptionSnippet') else result.get('channel', {}).get('name'),
         'duration': result.get('duration'),
         'url': f"https://www.youtube.com/watch?v={result.get('id')}",
@@ -244,7 +248,7 @@ class DeezerAPI:
     """Helper for Deezer Search & Metadata."""
     BASE_URL = "https://api.deezer.com"
 
-    async def search(self, query: str):
+    async def search(self, query: str, base_url: str = None):
         try:
             async with httpx.AsyncClient() as client:
                 resp = await client.get(f"{self.BASE_URL}/search", params={'q': query}, timeout=5.0)
@@ -255,7 +259,7 @@ class DeezerAPI:
                         'type': 'deezer',
                         'title': track.get('title'),
                         'artist': track.get('artist', {}).get('name'),
-                        'thumbnail': proxy_thumbnail(track.get('album', {}).get('cover_xl') or track.get('album', {}).get('cover_medium')),
+                        'thumbnail': proxy_thumbnail(track.get('album', {}).get('cover_xl') or track.get('album', {}).get('cover_medium'), base_url),
                         'duration': track.get('duration'),
                         'album': track.get('album', {}).get('title'),
                         'source': 'Deezer'
@@ -275,8 +279,11 @@ async def get_artist(name: str):
         raise HTTPException(status_code=404, detail="Artist info not found")
     return info
 
+from fastapi import Request
+
 @app.get("/search")
-async def search(q: str = Query(...)):
+async def search(request: Request, q: str = Query(...)):
+    base_url = str(request.base_url)
     try:
         # Parallel Search: Saavn + Deezer
         results_saavn: List = []
@@ -284,8 +291,8 @@ async def search(q: str = Query(...)):
         
         try:
             results_saavn, results_deezer = await asyncio.gather(
-                saavn.search(q),
-                deezer.search(q),
+                saavn.search(q, base_url),
+                deezer.search(q, base_url),
                 return_exceptions=True
             )
             # Handle potential exceptions from gather
@@ -307,31 +314,33 @@ async def search(q: str = Query(...)):
         # Fallback: YouTube Search
         search_engine = VideosSearch(q, limit=15)
         yt_results = search_engine.result().get('result', [])
-        return [format_search_result(v) for v in yt_results]
+        return [format_search_result(v, base_url) for v in yt_results]
     except Exception as e:
         logger.error(f"Search Error: {str(e)}")
         return []
 
 @app.get("/trending")
-async def trending():
+async def trending(request: Request):
+    base_url = str(request.base_url)
     try:
         # Get Saavn Charts
-        results = await saavn.get_charts()
+        results = await saavn.get_charts(base_url)
         if results:
             return results
             
         # YT fallback
         search_engine = VideosSearch("popular music 2024", limit=10)
         yt_results = search_engine.result().get('result', [])
-        return [format_search_result(v) for v in yt_results]
+        return [format_search_result(v, base_url) for v in yt_results]
     except Exception as e:
         logger.error(f"Trending Error: {str(e)}")
         return []
 
 @app.get("/home")
-async def home_content():
+async def home_content(request: Request):
+    base_url = str(request.base_url)
     try:
-        trending_songs = await trending()
+        trending_songs = await trending(request)
         return {
             "trending": trending_songs,
             "recently_played": trending_songs[:4] 
@@ -419,11 +428,13 @@ async def fetch_lavalink_stream(client: httpx.AsyncClient, node: dict, identifie
 
 @app.get("/stream")
 async def get_stream(
+    request: Request,
     id: str = Query(...), 
     title: Optional[str] = Query(None), 
     artist: Optional[str] = Query(None),
     duration_total: Optional[str] = Query(None)
 ):
+    base_url = str(request.base_url)
     """
     Optimized streaming logic with parallel lookups and caching.
     Priority: Invidious (Race with 3s timeout) -> SoundCloud (HLS) -> pytubefix -> yt-dlp
@@ -463,7 +474,7 @@ async def get_stream(
                         break
                 
                 if found_res:
-                    found_res['thumbnail'] = proxy_thumbnail(found_res.get('thumbnail'))
+                    found_res['thumbnail'] = proxy_thumbnail(found_res.get('thumbnail'), base_url)
                     logger.info(f"SUCCESS: Invidious")
                     return found_res
         except Exception as race_e:
@@ -487,12 +498,13 @@ async def get_stream(
     # 4. Ultimate Fallback: yt-dlp
     if yt_id:
         try:
-            with yt_dlp.YoutubeDL(YDL_OPTIONS) as ydl:
+            # Clear cache to avoid temporary blocks
+            with yt_dlp.YoutubeDL({**YDL_OPTIONS, 'cookiefile': None}) as ydl:
                 info = ydl.extract_info(f"https://www.youtube.com/watch?v={yt_id}", download=False)
                 return {
                     'stream_url': info.get('url'),
                     'title': info.get('title'),
-                    'thumbnail': proxy_thumbnail(info.get('thumbnail')),
+                    'thumbnail': proxy_thumbnail(info.get('thumbnail'), base_url),
                     'artist': info.get('uploader'),
                     'duration': info.get('duration'),
                     'source': 'yt-dlp'
