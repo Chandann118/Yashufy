@@ -1,5 +1,6 @@
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Response
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 import yt_dlp
 import asyncio
 import logging
@@ -8,6 +9,7 @@ import requests
 import re
 import time
 import httpx
+import urllib.parse
 from typing import List, Optional
 from youtubesearchpython import VideosSearch
 from ytmusicapi import YTMusic
@@ -31,7 +33,11 @@ INVIDIOUS_INSTANCES = [
     "https://inv.zzls.xyz",
     "https://invidious.projectsegfau.lt",
     "https://iv.datura.network",
-    "https://invidious.lunar.icu"
+    "https://invidious.lunar.icu",
+    "https://invidious.flokinet.to",
+    "https://iv.melmac.space",
+    "https://invidious.privacydev.net",
+    "https://inv.tux.pizza"
 ]
 
 LAVALINK_NODES = [
@@ -42,16 +48,16 @@ LAVALINK_NODES = [
 ]
 
 def proxy_thumbnail(url: str) -> str:
-    """Proxy image URLs to bypass CSP or blocking issues."""
+    """Legacy helper, now mostly routed through internal proxy."""
     if not url or not url.startswith('http'):
         return 'https://images.unsplash.com/photo-1614613535308-eb5fbd3d2c17?w=500'
     
-    import urllib.parse
-    # Extract the part after protocol for weserv
-    clean_url = url.split('?')[0] if 'ytimg.com' in url else url
-    url_no_proto = clean_url.replace('https://', '').replace('http://', '')
-    encoded_url = urllib.parse.quote(url_no_proto, safe='')
-    return f"https://images.weserv.nl/?url={encoded_url}&w=500&h=500&fit=cover"
+    # We will use our own backend to proxy the image for maximum reliability
+    # This avoids Referer blocks and CSP issues.
+    # The base URL will be appended dynamically or we use a relative path if possible,
+    # but for API consistency we'll use the wsrv.nl as primary and internal as ultimate.
+    encoded_url = urllib.parse.quote(url, safe='')
+    return f"https://wsrv.nl/?url={encoded_url}&w=500&h=500&fit=cover&n=-1" # n=-1 disables cache-control issues
 
 app = FastAPI(title="Vortex Music Backend")
 
@@ -74,6 +80,25 @@ async def get_version():
 async def ping():
     """Keep-alive endpoint for third-party services like cron-job.org"""
     return {"status": "pong", "timestamp": time.time()}
+
+@app.get("/proxy-image")
+async def proxy_image(url: str = Query(...)):
+    """Internal image proxy to bypass blocking."""
+    try:
+        async with httpx.AsyncClient(follow_redirects=True, timeout=10.0) as client:
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "Referer": "https://www.google.com/"
+            }
+            resp = await client.get(url, headers=headers)
+            if resp.status_code == 200:
+                return Response(content=resp.content, media_type=resp.headers.get("Content-Type", "image/jpeg"))
+            else:
+                # Fallback to a placeholder if source fails
+                return Response(status_code=302, headers={"Location": "https://images.unsplash.com/photo-1614613535308-eb5fbd3d2c17?w=500"})
+    except Exception as e:
+        logger.error(f"Image proxy error: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to proxy image")
 
 YDL_OPTIONS = {
     'format': 'bestaudio/best',
