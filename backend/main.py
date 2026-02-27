@@ -46,10 +46,11 @@ def proxy_thumbnail(url: str) -> str:
     if not url or not url.startswith('http'):
         return 'https://images.unsplash.com/photo-1614613535308-eb5fbd3d2c17?w=500'
     
-    # Use images.weserv.nl as a reliable global image proxy
-    # Format: https://images.weserv.nl/?url=[encoded_url]&w=500&h=500&fit=cover
+    import urllib.parse
+    # Extract the part after protocol for weserv
     clean_url = url.split('?')[0] if 'ytimg.com' in url else url
-    encoded_url = clean_url.replace('https://', '').replace('http://', '')
+    url_no_proto = clean_url.replace('https://', '').replace('http://', '')
+    encoded_url = urllib.parse.quote(url_no_proto, safe='')
     return f"https://images.weserv.nl/?url={encoded_url}&w=500&h=500&fit=cover"
 
 app = FastAPI(title="Vortex Music Backend")
@@ -479,7 +480,8 @@ async def get_stream(
         search_query = f"{title} {artist}" if title and artist else title or "song"
         global SC_CID_CACHE
         cid = SC_CID_CACHE.get("cid")
-        if not cid or time.time() > SC_CID_CACHE.get("expiry", 0):
+        expiry = float(SC_CID_CACHE.get("expiry", 0.0))
+        if not cid or time.time() > expiry:
             rsc = requests.get('https://soundcloud.com', headers={'User-Agent': 'Mozilla/5.0'}, timeout=5)
             js_matches = re.findall(r'src=\"(https://a-v2\.sndcdn\.com/assets/[^\"]+\.js)\"', rsc.text)
             for js_url in js_matches:

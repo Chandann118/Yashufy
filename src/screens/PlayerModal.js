@@ -20,7 +20,8 @@ const { width } = Dimensions.get('window');
 const ALBUM_ART_SIZE = width * 0.8;
 
 export default function PlayerModal({ navigation }) {
-    const { currentTrack, isPlaying, queue, currentIndex, isShuffle, repeatMode, backendUrl } = useSelector((state) => state.player);
+    const { currentTrack, isPlaying, queue, currentIndex, isShuffle, repeatMode } = useSelector((state) => state.player);
+    const { backendUrl } = useSelector((state) => state.settings);
     const dispatch = useDispatch();
 
     const [position, setPosition] = useState(0);
