@@ -161,8 +161,12 @@ export default function HomeScreen({ navigation }) {
                         <Text className="text-vortex-textSecondary text-sm font-medium uppercase tracking-widest">{greeting}</Text>
                         <Text className="text-white text-3xl font-extrabold">नमस्ते, <Text className="text-vortex-saffron">Vortex</Text></Text>
                     </View>
-                    <TouchableOpacity className="w-12 h-12 rounded-full border border-vortex-saffron items-center justify-center">
-                        <Zap size={24} color="#FF9933" />
+                    <TouchableOpacity className="w-12 h-12 rounded-full border border-vortex-saffron items-center justify-center overflow-hidden">
+                        <Image
+                            source={require('../../assets/icon.png')}
+                            className="w-full h-full"
+                            contentFit="contain"
+                        />
                     </TouchableOpacity>
                 </View>
 

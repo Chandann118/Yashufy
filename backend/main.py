@@ -42,11 +42,16 @@ app.add_middleware(
 
 @app.get("/health")
 async def health_check():
-    return {"status": "healthy", "ver": "v1.0.9-fixed"}
+    return {"status": "healthy", "ver": "v1.1.0-final-fix"}
 
 @app.get("/version")
 async def get_version():
-    return {"version": "1.0.9"}
+    return {"version": "1.1.0"}
+
+@app.get("/ping")
+async def ping():
+    """Keep-alive endpoint for third-party services like cron-job.org"""
+    return {"status": "pong", "timestamp": time.time()}
 
 YDL_OPTIONS = {
     'format': 'bestaudio/best',
@@ -69,8 +74,15 @@ class SaavnAPI:
     @staticmethod
     def _format_song(song):
         # Upgrade image to 500x500. Support 'image' or 'thumbnail' keys.
-        image = song.get('image') or song.get('thumbnail')
-        if image:
+        image_data = song.get('image') or song.get('thumbnail')
+        image = ""
+        if isinstance(image_data, list) and len(image_data) > 0:
+            # Handle list of images (highest quality usually last or has quality key)
+            image = image_data[-1].get('url') if isinstance(image_data[-1], dict) else str(image_data[-1])
+        else:
+            image = str(image_data) if image_data else ""
+
+        if image and image.startswith('http'):
             image = image.replace('150x150', '500x500').replace('50x50', '500x500')
             if 'http:' in image and 'https:' not in image:
                 image = image.replace('http:', 'https:')
