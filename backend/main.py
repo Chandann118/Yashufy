@@ -28,8 +28,29 @@ INVIDIOUS_INSTANCES = [
     "https://inv.tuep.pizza",
     "https://invidious.nerdvpn.de",
     "https://iv.ggtyler.dev",
-    "https://inv.zzls.xyz"
+    "https://inv.zzls.xyz",
+    "https://invidious.projectsegfau.lt",
+    "https://iv.datura.network",
+    "https://invidious.lunar.icu"
 ]
+
+LAVALINK_NODES = [
+    {"host": "lava.link", "port": 80, "password": "youshallnotpass", "secure": False},
+    {"host": "lavalink.lexis.host", "port": 443, "password": "lexishostlavalink", "secure": True},
+    {"host": "lava1.free-lavalink.com", "port": 443, "password": "free-lavalink", "secure": True},
+    {"host": "lava2.free-lavalink.com", "port": 443, "password": "free-lavalink", "secure": True}
+]
+
+def proxy_thumbnail(url: str) -> str:
+    """Proxy image URLs to bypass CSP or blocking issues."""
+    if not url or not url.startswith('http'):
+        return 'https://images.unsplash.com/photo-1614613535308-eb5fbd3d2c17?w=500'
+    
+    # Use images.weserv.nl as a reliable global image proxy
+    # Format: https://images.weserv.nl/?url=[encoded_url]&w=500&h=500&fit=cover
+    clean_url = url.split('?')[0] if 'ytimg.com' in url else url
+    encoded_url = clean_url.replace('https://', '').replace('http://', '')
+    return f"https://images.weserv.nl/?url={encoded_url}&w=500&h=500&fit=cover"
 
 app = FastAPI(title="Vortex Music Backend")
 
@@ -99,7 +120,7 @@ class SaavnAPI:
             'type': 'saavn',
             'title': song.get('title') or song.get('song'),
             'artist': song.get('primary_artists') or song.get('singers') or 'Unknown',
-            'thumbnail': image,
+            'thumbnail': proxy_thumbnail(image),
             'duration': duration,
             'album': song.get('album'),
             'year': song.get('year'),
@@ -162,7 +183,7 @@ def format_search_result(result):
     return {
         'id': result.get('id'),
         'title': result.get('title'),
-        'thumbnail': result.get('thumbnails', [{}])[0].get('url'),
+        'thumbnail': proxy_thumbnail(result.get('thumbnails', [{}])[0].get('url')),
         'artist': result.get('descriptionSnippet', [{}])[0].get('text') if result.get('descriptionSnippet') else result.get('channel', {}).get('name'),
         'duration': result.get('duration'),
         'url': f"https://www.youtube.com/watch?v={result.get('id')}",
@@ -208,7 +229,7 @@ class DeezerAPI:
                         'type': 'deezer',
                         'title': track.get('title'),
                         'artist': track.get('artist', {}).get('name'),
-                        'thumbnail': track.get('album', {}).get('cover_xl') or track.get('album', {}).get('cover_medium'),
+                        'thumbnail': proxy_thumbnail(track.get('album', {}).get('cover_xl') or track.get('album', {}).get('cover_medium')),
                         'duration': track.get('duration'),
                         'album': track.get('album', {}).get('title'),
                         'source': 'Deezer'
@@ -334,10 +355,37 @@ async def fetch_invidious_stream(client: httpx.AsyncClient, instance: str, video
                 return {
                     'stream_url': best_audio.get('url'),
                     'title': data.get('title'),
-                    'thumbnail': thumb,
+                    'thumbnail': proxy_thumbnail(thumb),
                     'artist': data.get('author'),
                     'duration': data.get('lengthSeconds'),
                     'source': f'Invidious ({instance})'
+                }
+    except Exception:
+        pass
+    return None
+
+async def fetch_lavalink_stream(client: httpx.AsyncClient, node: dict, identifier: str):
+    """Fetch stream via Lavalink v4 REST API."""
+    try:
+        protocol = "https" if node['secure'] else "http"
+        base = f"{protocol}://{node['host']}:{node['port']}"
+        headers = {"Authorization": node['password']}
+        
+        # Load tracks
+        resp = await client.get(f"{base}/v4/loadtracks?identifier={identifier}", headers=headers, timeout=5.0)
+        if resp.status_code == 200:
+            data = resp.json()
+            if data.get('loadType') in ['track', 'search'] and data.get('data'):
+                track_data = data['data'][0] if data['loadType'] == 'search' else data['data']
+                # Note: Lavalink provides info but usually you play via websocket.
+                # However, some nodes might expose stream URLs or we can use this for validation.
+                # For direct streaming, Invidious/SoundCloud are better, but Lavalink helps with metadata.
+                return {
+                    'title': track_data['info']['title'],
+                    'artist': track_data['info']['author'],
+                    'duration': track_data['info']['length'] // 1000,
+                    'thumbnail': proxy_thumbnail(track_data['info'].get('artworkUrl')),
+                    'source': f"Lavalink ({node['host']})"
                 }
     except Exception:
         pass
@@ -389,16 +437,26 @@ async def get_stream(
                         break
                 
                 if found_res:
-                    thumb = found_res.get('thumbnail') or ""
-                    if thumb.startswith('http:'):
-                        found_res['thumbnail'] = thumb.replace('http:', 'https:')
+                    found_res['thumbnail'] = proxy_thumbnail(found_res.get('thumbnail'))
                     logger.info(f"SUCCESS: Invidious")
                     return found_res
         except Exception as race_e:
             logger.warning(f"Invidious race error: {str(race_e)}")
 
-        except Exception as py_e:
-            logger.warning(f"pytubefix failed: {str(py_e)}")
+    # 1.5 Lavalink Metadata/Stream Check
+    if yt_id:
+        try:
+            async with httpx.AsyncClient(timeout=3.0) as client:
+                for node in LAVALINK_NODES:
+                    res = await fetch_lavalink_stream(client, node, yt_id)
+                    if res:
+                        # If Lavalink found it, we can use the metadata and proceed to other fallbacks for stream_url
+                        # if the node doesn't provide a direct stream_url in REST response
+                        logger.info(f"Lavalink confirmed track: {res['title']}")
+                        # We still need a stream_url, so we continue to SoundCloud/Pytubefix if needed
+                        break
+        except Exception as l_e:
+            logger.warning(f"Lavalink check failed: {str(l_e)}")
 
     # 4. Ultimate Fallback: yt-dlp
     if yt_id:
@@ -408,7 +466,7 @@ async def get_stream(
                 return {
                     'stream_url': info.get('url'),
                     'title': info.get('title'),
-                    'thumbnail': info.get('thumbnail'),
+                    'thumbnail': proxy_thumbnail(info.get('thumbnail')),
                     'artist': info.get('uploader'),
                     'duration': info.get('duration'),
                     'source': 'yt-dlp'
@@ -449,7 +507,7 @@ async def get_stream(
                             return {
                                 'stream_url': ru.json()['url'],
                                 'title': track.get('title'),
-                                'thumbnail': thumb or 'https://images.unsplash.com/photo-1614613535308-eb5fbd3d2c17?w=500',
+                                'thumbnail': proxy_thumbnail(thumb or 'https://images.unsplash.com/photo-1614613535308-eb5fbd3d2c17?w=500'),
                                 'artist': track.get('user', {}).get('username'),
                                 'duration': track.get('duration') // 1000,
                                 'source': 'SoundCloud'
@@ -468,7 +526,7 @@ async def get_stream(
                 return {
                     'stream_url': audio_stream.url,
                     'title': yt.title,
-                    'thumbnail': yt.thumbnail_url,
+                    'thumbnail': proxy_thumbnail(yt.thumbnail_url),
                     'artist': yt.author,
                     'duration': yt.length,
                     'source': 'pytubefix'
