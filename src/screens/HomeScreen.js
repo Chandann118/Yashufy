@@ -7,10 +7,11 @@ import { useDispatch, useSelector } from 'react-redux';
 import { setTrack, setPlaying, setQueue, setCurrentIndex } from '../store/playerSlice';
 import { playTrack } from '../services/audioService';
 
-const CategoryCard = ({ title, color }) => (
+const CategoryCard = ({ title, color, onPress }) => (
     <TouchableOpacity
         className="w-[48%] h-24 rounded-xl p-3 mb-4 overflow-hidden"
         style={{ backgroundColor: color }}
+        onPress={onPress}
     >
         <Text className="text-white font-bold text-lg">{title}</Text>
         <View className="absolute -bottom-2 -right-2 opacity-20">
@@ -29,7 +30,12 @@ const SectionHeader = ({ title, icon: Icon, color }) => (
 const SongCard = ({ title, artist, image, onPress }) => (
     <TouchableOpacity className="mr-4 w-36" onPress={onPress}>
         <View className="w-36 h-36 bg-vortex-surface rounded-xl overflow-hidden mb-2">
-            <Image source={{ uri: image || 'https://via.placeholder.com/150' }} className="w-full h-full" />
+            <Image
+                source={{ uri: image || 'https://images.unsplash.com/photo-1614613535308-eb5fbd3d2c17?w=500' }}
+                className="w-full h-full"
+                contentFit="cover"
+                transition={200}
+            />
         </View>
         <Text className="text-white font-semibold" numberOfLines={1}>{title}</Text>
         <Text className="text-vortex-textSecondary text-xs" numberOfLines={1}>{artist}</Text>
@@ -182,10 +188,10 @@ export default function HomeScreen({ navigation }) {
                 {/* Categories / Moods */}
                 <SectionHeader title="Moods & Genres" icon={Star} color="#0070FF" />
                 <View className="flex-row flex-wrap justify-between">
-                    <CategoryCard title="Chill" color="#1E3A8A" />
-                    <CategoryCard title="Workout" color="#7F1D1D" />
-                    <CategoryCard title="Focus" color="#064E3B" />
-                    <CategoryCard title="Party" color="#4C1D95" />
+                    <CategoryCard title="Chill" color="#1E3A8A" onPress={() => navigation.navigate('Search', { category: 'Chill' })} />
+                    <CategoryCard title="Workout" color="#7F1D1D" onPress={() => navigation.navigate('Search', { category: 'Workout' })} />
+                    <CategoryCard title="Focus" color="#064E3B" onPress={() => navigation.navigate('Search', { category: 'Focus' })} />
+                    <CategoryCard title="Party" color="#4C1D95" onPress={() => navigation.navigate('Search', { category: 'Party' })} />
                 </View>
 
                 {/* Trending */}

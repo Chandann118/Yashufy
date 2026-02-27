@@ -23,14 +23,12 @@ SC_CID_CACHE = {"cid": None, "expiry": 0.0}
 
 INVIDIOUS_INSTANCES = [
     "https://inv.nadeko.net",
-    "https://inv.zzls.xyz",
-    "https://iv.datura.network",
-    "https://invidious.projectsegfau.lt",
-    "https://yewtu.be",
     "https://inv.tux.pizza",
-    "https://invidious.nerdvpn.de",
     "https://iv.melmac.space",
-    "https://inv.tuep.pizza"
+    "https://inv.tuep.pizza",
+    "https://invidious.nerdvpn.de",
+    "https://iv.ggtyler.dev",
+    "https://inv.zzls.xyz"
 ]
 
 app = FastAPI(title="Vortex Music Backend")
@@ -72,9 +70,13 @@ class SaavnAPI:
     @staticmethod
     def _format_song(song):
         # Upgrade image to 500x500. Support 'image' or 'thumbnail' keys.
-        image = song.get('image') or song.get('thumbnail') or ''
-        image = image.replace('150x150', '500x500').replace('50x50', '500x500')
-        if image.startswith('http:'): image = image.replace('http:', 'https:')
+        if image:
+            # Upgrade image to 500x500. Support 'image' or 'thumbnail' keys.
+            image = image.replace('150x150', '500x500').replace('50x50', '500x500')
+            if 'http:' in image and 'https:' not in image:
+                image = image.replace('http:', 'https:')
+        else:
+            image = 'https://images.unsplash.com/photo-1614613535308-eb5fbd3d2c17?w=500' # High-quality fallback
         
         # Format duration
         duration = song.get('duration', 0)
@@ -339,7 +341,7 @@ async def get_stream(
 ):
     """
     Optimized streaming logic with parallel lookups and caching.
-    Priority: Invidious (Parallel) -> pytubefix -> SoundCloud (HLS) -> yt-dlp
+    Priority: Invidious (Race with 3s timeout) -> SoundCloud (HLS) -> pytubefix -> yt-dlp
     """
     yt_id = id
     
@@ -360,9 +362,9 @@ async def get_stream(
     if yt_id:
         try:
             logger.info(f"Starting Invidious race for: {yt_id}")
-            async with httpx.AsyncClient(follow_redirects=True) as client:
+            async with httpx.AsyncClient(follow_redirects=True, timeout=3.0) as client:
                 tasks = [fetch_invidious_stream(client, inst, yt_id) for inst in INVIDIOUS_INSTANCES]
-                # Race: Wait for first non-None result
+                # Race: Wait for first non-None result within a tight window
                 found_res = None
                 for completed_task in asyncio.as_completed(tasks):
                     res = await completed_task
@@ -384,24 +386,23 @@ async def get_stream(
         except Exception as race_e:
             logger.warning(f"Invidious race error: {str(race_e)}")
 
-    # 2. Fallback: pytubefix
-    if yt_id:
-        try:
-            from pytubefix import YouTube
-            yt = YouTube(f"https://youtube.com/watch?v={yt_id}")
-            audio_stream = yt.streams.get_audio_only()
-            if audio_stream:
-                logger.info("SUCCESS: pytubefix")
-                return {
-                    'stream_url': audio_stream.url,
-                    'title': yt.title,
-                    'thumbnail': yt.thumbnail_url,
-                    'artist': yt.author,
-                    'duration': yt.length,
-                    'source': 'pytubefix'
-                }
         except Exception as py_e:
             logger.warning(f"pytubefix failed: {str(py_e)}")
+
+    # 4. Ultimate Fallback: yt-dlp
+    if yt_id:
+        try:
+            with yt_dlp.YoutubeDL(YDL_OPTIONS) as ydl:
+                info = ydl.extract_info(f"https://www.youtube.com/watch?v={yt_id}", download=False)
+                return {
+                    'stream_url': info.get('url'),
+                    'title': info.get('title'),
+                    'thumbnail': info.get('thumbnail'),
+                    'artist': info.get('uploader'),
+                    'duration': info.get('duration'),
+                    'source': 'yt-dlp'
+                }
+        except Exception: pass
 
     # 3. Fallback: SoundCloud HLS (Safety Net)
     logger.info("Falling back to SoundCloud HLS")
@@ -445,20 +446,24 @@ async def get_stream(
     except Exception as sce:
         logger.warning(f"SoundCloud safety fallback failed: {str(sce)}")
 
-    # 4. Ultimate Fallback: yt-dlp
+    # 5. Fallback: pytubefix (Last resort as it's often throttled)
     if yt_id:
         try:
-            with yt_dlp.YoutubeDL(YDL_OPTIONS) as ydl:
-                info = ydl.extract_info(f"https://www.youtube.com/watch?v={yt_id}", download=False)
+            from pytubefix import YouTube
+            yt = YouTube(f"https://youtube.com/watch?v={yt_id}")
+            audio_stream = yt.streams.get_audio_only()
+            if audio_stream:
+                logger.info("SUCCESS: pytubefix")
                 return {
-                    'stream_url': info.get('url'),
-                    'title': info.get('title'),
-                    'thumbnail': info.get('thumbnail'),
-                    'artist': info.get('uploader'),
-                    'duration': info.get('duration'),
-                    'source': 'yt-dlp'
+                    'stream_url': audio_stream.url,
+                    'title': yt.title,
+                    'thumbnail': yt.thumbnail_url,
+                    'artist': yt.author,
+                    'duration': yt.length,
+                    'source': 'pytubefix'
                 }
-        except Exception: pass
+        except Exception as py_e:
+            logger.warning(f"pytubefix (last resort) failed: {str(py_e)}")
 
     raise HTTPException(status_code=503, detail="No stream available")
 

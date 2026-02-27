@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { View, Text, TextInput, FlatList, TouchableOpacity, ActivityIndicator } from 'react-native';
 import { Image } from 'expo-image';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -8,19 +8,28 @@ import { setTrack, setPlaying, setQueue, setCurrentIndex } from '../store/player
 import { playTrack } from '../services/audioService';
 import { useSelector } from 'react-redux';
 
-export default function SearchScreen({ navigation }) {
+export default function SearchScreen({ navigation, route }) {
     const backendUrl = useSelector(state => state.settings.backendUrl);
     const [query, setQuery] = useState('');
     const [results, setResults] = useState([]);
     const [loading, setLoading] = useState(false);
     const [fetchingTrackId, setFetchingTrackId] = useState(null);
     const dispatch = useDispatch();
+    const categoryQuery = route.params?.category;
 
-    const handleSearch = async () => {
-        if (!query.trim()) return;
+    useEffect(() => {
+        if (categoryQuery) {
+            setQuery(categoryQuery);
+            handleSearch(categoryQuery);
+        }
+    }, [categoryQuery]);
+
+    const handleSearch = async (overrideQuery) => {
+        const activeQuery = overrideQuery || query;
+        if (!activeQuery.trim()) return;
         setLoading(true);
         try {
-            const response = await fetch(`${backendUrl}/search?q=${encodeURIComponent(query)}`, {
+            const response = await fetch(`${backendUrl}/search?q=${encodeURIComponent(activeQuery)}`, {
                 headers: { 'Bypass-Tunnel-Reminder': 'true' }
             });
             const data = await response.json();
