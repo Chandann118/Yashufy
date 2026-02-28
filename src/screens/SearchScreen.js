@@ -7,6 +7,9 @@ import { useDispatch } from 'react-redux';
 import { setTrack, setPlaying, setQueue, setCurrentIndex } from '../store/playerSlice';
 import { playTrack } from '../services/audioService';
 import { useSelector } from 'react-redux';
+import { getThumbnailUrl } from '../utils/imageUtils';
+import { fetchStreamWithRetry } from '../services/streamService';
+import { warmupManager } from '../services/warmupService';
 
 export default function SearchScreen({ navigation, route }) {
     const backendUrl = useSelector(state => state.settings.backendUrl);
@@ -38,6 +41,9 @@ export default function SearchScreen({ navigation, route }) {
             console.error('Search error:', error);
         } finally {
             setLoading(false);
+            if (results && results.length > 0) {
+                warmupManager.warmUpTracks(results.slice(0, 5));
+            }
         }
     };
 
@@ -49,20 +55,14 @@ export default function SearchScreen({ navigation, route }) {
             const queueToUse = customQueue || results;
             const itemIndex = index !== undefined ? index : queueToUse.findIndex(i => i.id === item.id);
 
-            const streamResponse = await fetch(`${backendUrl}/stream?id=${item.id}&title=${encodeURIComponent(item.title)}&artist=${encodeURIComponent(item.artist)}&duration_total=${item.duration || ''}`, {
-                headers: { 'Bypass-Tunnel-Reminder': 'true' }
-            });
-
-            if (!streamResponse.ok) throw new Error('Failed to fetch stream');
-
-            const streamData = await streamResponse.json();
+            const streamData = await fetchStreamWithRetry(item);
 
             const track = {
                 id: item.id,
                 url: streamData.stream_url,
                 title: item.title,
                 artist: item.artist,
-                artwork: streamData.thumbnail || item.thumbnail,
+                artwork: getThumbnailUrl({ ...item, thumbnail: streamData.thumbnail }),
                 duration: item.duration || streamData.duration,
             };
 
@@ -123,7 +123,7 @@ export default function SearchScreen({ navigation, route }) {
                             onPress={() => handlePlay(item, index, results)}
                         >
                             <View className="relative">
-                                <Image source={{ uri: item.thumbnail }} className="w-16 h-16 rounded-lg" />
+                                <Image source={{ uri: getThumbnailUrl(item) }} className="w-16 h-16 rounded-lg" />
                                 {item.source && (
                                     <View className="absolute -bottom-1 -right-1 bg-vortex-saffron px-1.5 py-0.5 rounded-md">
                                         <Text className="text-black text-[8px] font-bold uppercase">{item.source}</Text>

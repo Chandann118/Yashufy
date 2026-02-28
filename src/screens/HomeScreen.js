@@ -6,6 +6,9 @@ import { Play, Heart, Star, TrendingUp, Zap, Clock, Disc } from 'lucide-react-na
 import { useDispatch, useSelector } from 'react-redux';
 import { setTrack, setPlaying, setQueue, setCurrentIndex } from '../store/playerSlice';
 import { playTrack } from '../services/audioService';
+import { getThumbnailUrl } from '../utils/imageUtils';
+import { fetchStreamWithRetry } from '../services/streamService';
+import { warmupManager } from '../services/warmupService';
 
 const CategoryCard = ({ title, color, onPress }) => (
     <TouchableOpacity
@@ -31,7 +34,7 @@ const SongCard = ({ title, artist, image, onPress }) => (
     <TouchableOpacity className="mr-4 w-36" onPress={onPress}>
         <View className="w-36 h-36 bg-vortex-surface rounded-xl overflow-hidden mb-2">
             <Image
-                source={{ uri: image || 'https://images.unsplash.com/photo-1614613535308-eb5fbd3d2c17?w=500' }}
+                source={{ uri: getThumbnailUrl({ thumbnail: image, title, artist }) }}
                 className="w-full h-full"
                 contentFit="cover"
                 transition={200}
@@ -103,6 +106,9 @@ export default function HomeScreen({ navigation }) {
             console.error('Home fetch error:', error);
         } finally {
             setLoading(false);
+            if (trending && trending.length > 0) {
+                warmupManager.warmUpTracks(trending.slice(0, 5));
+            }
         }
     };
 
@@ -114,20 +120,14 @@ export default function HomeScreen({ navigation }) {
             const queueToUse = customQueue || trending;
             const itemIndex = index !== undefined ? index : queueToUse.findIndex(i => i.id === item.id);
 
-            const streamResponse = await fetch(`${backendUrl}/stream?id=${item.id}&title=${encodeURIComponent(item.title)}&artist=${encodeURIComponent(item.artist)}&duration_total=${item.duration || ''}`, {
-                headers: { 'Bypass-Tunnel-Reminder': 'true' }
-            });
-
-            if (!streamResponse.ok) throw new Error('Failed to fetch stream');
-
-            const streamData = await streamResponse.json();
+            const streamData = await fetchStreamWithRetry(item);
 
             const track = {
                 id: item.id,
                 url: streamData.stream_url,
                 title: item.title,
                 artist: item.artist,
-                artwork: streamData.thumbnail || item.thumbnail,
+                artwork: getThumbnailUrl({ ...item, thumbnail: streamData.thumbnail }),
                 duration: item.duration || streamData.duration,
             };
 

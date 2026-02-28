@@ -14,6 +14,8 @@ import Animated, {
 import { Play, Pause, SkipForward, SkipBack, ChevronDown, Heart, Share2, Shuffle, Repeat, MoreVertical } from 'lucide-react-native';
 import { setPlaying, setTrack, toggleShuffle, toggleRepeatMode, setCurrentIndex } from '../store/playerSlice';
 import { togglePlayback, seekTo, getPlaybackInstance, playTrack } from '../services/audioService';
+import { fetchStreamWithRetry } from '../services/streamService';
+import { getThumbnailUrl } from '../utils/imageUtils';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 const { width } = Dimensions.get('window');
@@ -66,19 +68,14 @@ export default function PlayerModal({ navigation }) {
         try {
             setIsFetching(true);
             const item = queue[index];
-            const streamResponse = await fetch(`${backendUrl}/stream?id=${item.id}&title=${encodeURIComponent(item.title)}&artist=${encodeURIComponent(item.artist)}&duration_total=${item.duration || ''}`, {
-                headers: { 'Bypass-Tunnel-Reminder': 'true' }
-            });
-
-            if (!streamResponse.ok) throw new Error('Failed to fetch stream');
-            const streamData = await streamResponse.json();
+            const streamData = await fetchStreamWithRetry(item);
 
             const track = {
                 id: item.id,
                 url: streamData.stream_url,
                 title: item.title,
                 artist: item.artist,
-                artwork: streamData.thumbnail || item.thumbnail,
+                artwork: getThumbnailUrl({ ...item, thumbnail: streamData.thumbnail }),
                 duration: item.duration || streamData.duration,
             };
 
@@ -86,11 +83,7 @@ export default function PlayerModal({ navigation }) {
             dispatch(setCurrentIndex(index));
             dispatch(setPlaying(true));
 
-            await playTrack(track, (status) => {
-                if (status.didJustFinish) {
-                    // Handled by the effect listener
-                }
-            });
+            await playTrack(track);
         } catch (error) {
             console.error('Playback error:', error);
         } finally {
@@ -161,7 +154,7 @@ export default function PlayerModal({ navigation }) {
                     <ChevronDown size={30} color="white" />
                 </TouchableOpacity>
                 <Text className="text-white text-xs font-bold uppercase tracking-widest opacity-70">
-                    {isFetching ? "Loading Next..." : "Now Playing"}
+                    {isFetching ? "Preparing track..." : "Now Playing"}
                 </Text>
                 <TouchableOpacity>
                     <Share2 size={24} color="white" />

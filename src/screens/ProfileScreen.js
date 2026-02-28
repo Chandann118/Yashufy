@@ -1,9 +1,87 @@
 import React, { useState } from 'react';
-import { View, Text, TextInput, Pressable, Alert, ScrollView, StyleSheet } from 'react-native';
+import { View, Text, TextInput, Pressable, Alert, ScrollView, StyleSheet, ActivityIndicator } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useDispatch, useSelector } from 'react-redux';
 import { setBackendUrl, setDiscoveryUrl } from '../store/settingsSlice';
-import { Settings, Globe, Save, Zap, ChevronDown, ChevronUp } from 'lucide-react-native';
+import { Settings, Globe, Save, Zap, ChevronDown, ChevronUp, PlayCircle, CheckCircle2, XCircle } from 'lucide-react-native';
+
+const StreamTester = ({ backendUrl }) => {
+    const [videoId, setVideoId] = useState('');
+    const [results, setResults] = useState(null);
+    const [loading, setLoading] = useState(false);
+
+    const testStream = async () => {
+        if (!videoId.trim()) {
+            Alert.alert('Error', 'Please enter a Video ID');
+            return;
+        }
+        setLoading(true);
+        setResults(null);
+        try {
+            const methods = ['yt-dlp', 'piped', 'invidious', 'pytubefix'];
+            const testResults = {};
+            for (const method of methods) {
+                const res = await fetch(`${backendUrl}/test/stream/${videoId}?method=${method}`, {
+                    headers: { 'Bypass-Tunnel-Reminder': 'true' }
+                });
+                testResults[method] = await res.json();
+            }
+            setResults(testResults);
+        } catch (error) {
+            Alert.alert('Test Failed', error.message);
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    return (
+        <View style={styles.card}>
+            <View style={styles.cardHeader}>
+                <PlayCircle size={20} color="#FF9933" />
+                <Text style={styles.cardSectionTitle}>Stream Health Tester</Text>
+            </View>
+            <Text style={styles.description}>Test backend extraction for specific Video IDs.</Text>
+
+            <TextInput
+                style={styles.input}
+                placeholder="YouTube Video ID (e.g. dQw4w9WgXcQ)"
+                placeholderTextColor="#666"
+                value={videoId}
+                onChangeText={setVideoId}
+                autoCapitalize="none"
+            />
+
+            <Pressable
+                style={({ pressed }) => [styles.primaryButton, { opacity: (pressed || loading) ? 0.7 : 1, marginLeft: 0 }]}
+                onPress={testStream}
+                disabled={loading}
+            >
+                <Text style={styles.primaryButtonText}>{loading ? 'Testing...' : 'Run Diagnostics'}</Text>
+            </Pressable>
+
+            {results && (
+                <View style={styles.testContainer}>
+                    {Object.entries(results).map(([method, data]) => (
+                        <View key={method} style={styles.testRow}>
+                            <Text style={styles.testMethod}>{method.toUpperCase()}</Text>
+                            {data.available ? (
+                                <View style={styles.statusBadge}>
+                                    <CheckCircle2 size={14} color="#4ADE80" />
+                                    <Text style={styles.statusTextSuccess}>Available</Text>
+                                </View>
+                            ) : (
+                                <View style={styles.statusBadge}>
+                                    <XCircle size={14} color="#F87171" />
+                                    <Text style={styles.statusTextError}>Failed</Text>
+                                </View>
+                            )}
+                        </View>
+                    ))}
+                </View>
+            )}
+        </View>
+    );
+};
 
 export default function ProfileScreen() {
     const settings = useSelector(state => state.settings);
@@ -164,6 +242,9 @@ export default function ProfileScreen() {
                                 <Text style={styles.saveButtonText}>Apply URL Manually</Text>
                             </Pressable>
                         </View>
+
+                        {/* Stream Tester Card */}
+                        <StreamTester backendUrl={settings.backendUrl} />
                     </>
                 )}
 
@@ -368,5 +449,40 @@ const styles = StyleSheet.create({
         color: '#333',
         fontSize: 11,
         marginTop: 4,
+    },
+    testContainer: {
+        marginTop: 20,
+        backgroundColor: '#000',
+        borderRadius: 12,
+        padding: 12,
+    },
+    testRow: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        paddingVertical: 8,
+        borderBottomWidth: 1,
+        borderBottomColor: '#222',
+    },
+    testMethod: {
+        color: '#A0A0A0',
+        fontSize: 12,
+        fontWeight: 'bold',
+    },
+    statusBadge: {
+        flexDirection: 'row',
+        alignItems: 'center',
+    },
+    statusTextSuccess: {
+        color: '#4ADE80',
+        fontSize: 12,
+        marginLeft: 4,
+        fontWeight: '600',
+    },
+    statusTextError: {
+        color: '#F87171',
+        fontSize: 12,
+        marginLeft: 4,
+        fontWeight: '600',
     }
 });

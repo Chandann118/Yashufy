@@ -12,6 +12,22 @@ export default function App() {
   useEffect(() => {
     setupPlayer();
     syncBackendWithDiscovery();
+
+    // Keep-alive ping every 10 minutes to prevent Render sleep
+    const keepAlive = setInterval(async () => {
+      try {
+        const state = store.getState();
+        const backendUrl = state.settings.backendUrl;
+        if (backendUrl) {
+          console.log('Sending keep-alive ping...');
+          await fetch(`${backendUrl}/health`, { headers: { 'Bypass-Tunnel-Reminder': 'true' } });
+        }
+      } catch (e) {
+        console.log('Keep-alive ping failed:', e.message);
+      }
+    }, 10 * 60 * 1000);
+
+    return () => clearInterval(keepAlive);
   }, []);
 
   const syncBackendWithDiscovery = async () => {

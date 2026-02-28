@@ -19,7 +19,8 @@ export const setupPlayer = async () => {
     }
 };
 
-export const playTrack = async (track, onPlaybackStatusUpdate) => {
+export const playTrack = async (track, onPlaybackStatusUpdate, retryAttempt = 0) => {
+    const maxRetries = 3;
     try {
         if (playbackInstance !== null) {
             await playbackInstance.unloadAsync();
@@ -27,7 +28,10 @@ export const playTrack = async (track, onPlaybackStatusUpdate) => {
         }
 
         const { sound } = await Audio.Sound.createAsync(
-            { uri: track.url },
+            {
+                uri: track.url,
+                headers: { 'User-Agent': 'VortexMusic/1.0' }
+            },
             { shouldPlay: true },
             onPlaybackStatusUpdate
         );
@@ -37,7 +41,15 @@ export const playTrack = async (track, onPlaybackStatusUpdate) => {
 
         return sound;
     } catch (error) {
-        console.log('Error playing track:', error);
+        console.log(`Error playing track (Attempt ${retryAttempt + 1}):`, error);
+
+        if (retryAttempt < maxRetries) {
+            const waitTime = Math.pow(2, retryAttempt) * 1000;
+            console.log(`Retrying in ${waitTime}ms...`);
+            await new Promise(resolve => setTimeout(resolve, waitTime));
+            return playTrack(track, onPlaybackStatusUpdate, retryAttempt + 1);
+        }
+
         throw error;
     }
 };

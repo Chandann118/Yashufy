@@ -10,7 +10,8 @@ import re
 import time
 import httpx
 import urllib.parse
-from typing import List, Optional
+from typing import List, Optional, Dict
+import aiohttp
 from youtubesearchpython import VideosSearch
 from ytmusicapi import YTMusic
 import base64
@@ -24,6 +25,21 @@ logger = logging.getLogger("VortexMusic")
 
 # Global cache for SoundCloud Client ID
 SC_CID_CACHE = {"cid": None, "expiry": 0.0}
+
+# Global stream cache: {video_id: {"url": str, "bitrate": int, "expiry": float}}
+STREAM_CACHE = {}
+
+def get_cached_stream(video_id: str):
+    cached = STREAM_CACHE.get(video_id)
+    if cached and cached['expiry'] > time.time():
+        return cached['data']
+    return None
+
+def set_cached_stream(video_id: str, data: dict):
+    STREAM_CACHE[video_id] = {
+        'data': data,
+        'expiry': time.time() + 1800  # 30 minute cache
+    }
 
 INVIDIOUS_INSTANCES = [
     "https://inv.nadeko.net",
@@ -326,9 +342,9 @@ async def search(request: Request, q: str = Query(...)):
         # Merge results, prioritizing Saavn for Indian content (first 10), then Deezer
         final_merged = []
         if isinstance(results_saavn, list):
-            final_merged.extend(list(results_saavn)[:10])
+            final_merged.extend(results_saavn[:10])
         if isinstance(results_deezer, list):
-            final_merged.extend(list(results_deezer))
+            final_merged.extend(results_deezer)
             
         if final_merged:
             return final_merged
@@ -393,70 +409,104 @@ def is_duration_match(meta_duration, stream_duration):
         return True
 
 
-async def fetch_invidious_stream(client: httpx.AsyncClient, instance: str, video_id: str):
-    """Helper to fetch stream from a single Invidious instance."""
-    try:
-        resp = await client.get(f"{instance}/api/v1/videos/{video_id}", timeout=5.0)
-        if resp.status_code == 200:
-            data = resp.json()
-            adaptive_formats = data.get('adaptiveFormats', [])
-            audio_formats = [f for f in adaptive_formats if f.get('type', '').startswith('audio/')]
-            if audio_formats:
-                best_audio = sorted(audio_formats, key=lambda x: int(x.get('bitrate') or 0), reverse=True)[0]
-                thumb = data.get('videoThumbnails', [{}])[0].get('url') if data.get('videoThumbnails') else None
-                if thumb and thumb.startswith('/'): thumb = f"{instance}{thumb}"
-                
-                return {
-                    'stream_url': best_audio.get('url'),
-                    'title': data.get('title'),
-                    'thumbnail': thumb, # Raw
-                    'artist': data.get('author'),
-                    'duration': data.get('lengthSeconds'),
-                    'source': f'Invidious ({instance})'
+class RobustYouTubeExtractor:
+    """Uses multiple methods to extract audio streams with maximum reliability."""
+    
+    def __init__(self):
+        self.ydl_opts = {
+            'format': 'bestaudio/best',
+            'noplaylist': True,
+            'quiet': True,
+            'no_warnings': True,
+            'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'nocheckcertificate': True,
+            'extractor_args': {
+                'youtube': {
+                    'player_client': ['android', 'ios'],
+                    'skip': ['hls', 'dash']
                 }
-    except: pass
-    return None
+            }
+        }
 
-async def fetch_piped_stream(client: httpx.AsyncClient, instance: str, video_id: str):
-    """Fetch stream from Piped API."""
-    try:
-        resp = await client.get(f"{instance}/streams/{video_id}", timeout=5.0)
-        if resp.status_code == 200:
-            data = resp.json()
-            audio_streams = data.get('audioStreams', [])
-            if audio_streams:
-                best = sorted(audio_streams, key=lambda x: x.get('bitrate', 0), reverse=True)[0]
-                return {
-                    'stream_url': best.get('url'),
-                    'title': data.get('title'),
-                    'thumbnail': data.get('thumbnailUrl'), # Raw
-                    'artist': data.get('uploader'),
-                    'duration': data.get('duration'),
-                    'source': f'Piped ({instance})'
-                }
-    except: pass
-    return None
+    async def get_audio_stream(self, video_id: str) -> Optional[Dict]:
+        """Try multiple methods sequentially with fallback."""
+        methods = [
+            (self._extract_with_ytdlp, "yt-dlp"),
+            (self._extract_with_piped, "Piped"),
+            (self._extract_with_invidious, "Invidious"),
+            (self._extract_with_pytubefix, "pytubefix")
+        ]
+        
+        # Check cache first
+        cached = get_cached_stream(video_id)
+        if cached:
+            logger.info(f"Using cached stream for {video_id}")
+            return cached
 
-async def fetch_lavalink_stream(client: httpx.AsyncClient, node: dict, identifier: str):
-    """Fetch track info via Lavalink v4 REST API."""
-    try:
-        protocol = "https" if node['secure'] else "http"
-        base = f"{protocol}://{node['host']}:{node['port']}"
-        headers = {"Authorization": node['password']}
-        resp = await client.get(f"{base}/v4/loadtracks?identifier={identifier}", headers=headers, timeout=5.0)
-        if resp.status_code == 200:
-            data = resp.json()
-            if data.get('loadType') in ['track', 'search'] and data.get('data'):
-                track_data = data['data'][0] if data['loadType'] == 'search' else data['data']
-                return {
-                    'title': track_data['info']['title'],
-                    'artist': track_data['info']['author'],
-                    'duration': track_data['info']['length'] // 1000,
-                    'thumbnail': track_data['info'].get('artworkUrl'), # Raw
-                    'source': f"Lavalink ({node['host']})"
-                }
-    except: pass
-    return None
+        for method, name in methods:
+            try:
+                logger.info(f"Trying extraction method: {name}")
+                result = await method(video_id)
+                if result:
+                    result['method'] = name
+                    set_cached_stream(video_id, result)
+                    return result
+            except Exception as e:
+                logger.warning(f"Method {name} failed: {str(e)}")
+                continue
+        return None
+
+    async def _extract_with_ytdlp(self, video_id: str):
+        with yt_dlp.YoutubeDL(self.ydl_opts) as ydl:
+            info = ydl.extract_info(f"https://www.youtube.com/watch?v={video_id}", download=False)
+            return {'url': info.get('url'), 'bitrate': info.get('abr', 128), 'duration': info.get('duration')}
+
+    async def _extract_with_piped(self, video_id: str):
+        instance = random.choice(PIPED_INSTANCES)
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.get(f"{instance}/streams/{video_id}")
+            if resp.status_code == 200:
+                data = resp.json()
+                audio_streams = data.get('audioStreams', [])
+                if audio_streams:
+                    best = sorted(audio_streams, key=lambda x: x.get('bitrate', 0), reverse=True)[0]
+                    return {'url': best.get('url'), 'bitrate': best.get('bitrate', 128), 'duration': data.get('duration')}
+        return None
+
+    async def _extract_with_invidious(self, video_id: str):
+        instance = random.choice(INVIDIOUS_INSTANCES)
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.get(f"{instance}/api/v1/videos/{video_id}")
+            if resp.status_code == 200:
+                data = resp.json()
+                adaptive_formats = data.get('adaptiveFormats', [])
+                audio_formats = [f for f in adaptive_formats if f.get('type', '').startswith('audio/')]
+                if audio_formats:
+                    best = sorted(audio_formats, key=lambda x: int(x.get('bitrate') or 0), reverse=True)[0]
+                    return {'url': best.get('url'), 'bitrate': int(best.get('bitrate', 128)), 'duration': data.get('lengthSeconds')}
+        return None
+
+    async def _extract_with_pytubefix(self, video_id: str):
+        from pytubefix import YouTube
+        yt = YouTube(f"https://youtube.com/watch?v={video_id}")
+        audio_stream = yt.streams.get_audio_only()
+        if audio_stream:
+            return {'url': audio_stream.url, 'bitrate': 128, 'duration': yt.length}
+        return None
+
+extractor = RobustYouTubeExtractor()
+
+async def proxy_stream_iter(url: str):
+    """Generator to proxy audio bytes."""
+    timeout = aiohttp.ClientTimeout(total=None, connect=10)
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Range': 'bytes=0-'
+        }
+        async with session.get(url, headers=headers) as resp:
+            async for chunk in resp.content.iter_chunked(1024 * 64): # 64KB chunks
+                yield chunk
 
 @app.get("/stream")
 async def get_stream(
@@ -471,20 +521,16 @@ async def get_stream(
     if "onrender.com" in base_url:
         base_url = base_url.replace("http://", "https://")
     
-    # 0. Primary Fix: Direct Saavn Decryption (Extremely reliable)
+    # JioSaavn Direct Decryption
     if id.startswith('saavn_') or enc_url:
-        logger.info(f"Using direct Saavn decryption for: {id}")
-        # Try decrypting the enc_url if provided, or fetch it if not
         secret_url = enc_url
         if not secret_url:
-            # Fetch song details to get encrypted_media_url
             try:
                 sid = id.replace('saavn_', '')
                 async with httpx.AsyncClient() as client:
                     ds = await client.get(f"https://www.jiosaavn.com/api.php?__call=song.getDetails&pids={sid}&_format=json&_marker=0&api_version=4&ctx=web6dot0", timeout=5.0)
                     if ds.status_code == 200:
                         s_data = ds.json()
-                        # The response is usually a dict where keys are IDs
                         song_obj = s_data.get(sid) or list(s_data.values())[0] if s_data else {}
                         secret_url = song_obj.get('encrypted_media_url')
             except: pass
@@ -492,164 +538,78 @@ async def get_stream(
         if secret_url:
             stream_link = decrypt_saavn_url(secret_url)
             if stream_link:
-                # Get a thumbnail from YT search as Saavn thumbnails are often tiny or blocked
-                thumb = 'https://images.unsplash.com/photo-1614613535308-eb5fbd3d2c17?w=500'
-                try:
-                    search = VideosSearch(f"{title} {artist}", limit=1)
-                    res = search.result().get('result', [])
-                    if res: thumb = res[0].get('thumbnails', [{}])[0].get('url')
-                except: pass
-                
-                return {
-                    'stream_url': stream_link,
-                    'title': title or "Saavn Track",
-                    'thumbnail': proxy_thumbnail(thumb, base_url),
-                    'artist': artist or "JioSaavn",
-                    'duration': int(duration_total) if duration_total else 0,
-                    'source': 'JioSaavn (Direct)'
-                }
+                # Proxy Saavn too for reliability
+                return StreamingResponse(proxy_stream_iter(stream_link), media_type="audio/mpeg")
 
-    """
-    Optimized streaming logic with parallel lookups and caching.
-    Priority: Piped/Invidious Race -> SoundCloud (HLS) -> pytubefix -> yt-dlp
-    """
+    # YouTube Extraction with Robust Fallback
     yt_id = id
-    
-    # Resolve Saavn/Other non-YT IDs with YTMusic pinpoint
-    if (len(id) != 11 or id.startswith('saavn_') or id.startswith('deezer_')) and title and artist:
-        logger.info(f"Resolving metadata for: {title} - {artist}")
+    if (len(id) != 11 or id.startswith('saavn_')) and title and artist:
         try:
-            ytm = YTMusic()
-            search_results = ytm.search(f"{title} {artist}", filter="songs", limit=1)
+            search_results = ytmusic.search(f"{title} {artist}", filter="songs", limit=1)
             if search_results:
                 yt_id = search_results[0].get('videoId')
-                logger.info(f"YTMusic resolved to: {yt_id}")
-        except Exception as yte:
-            logger.warning(f"YTMusic resolution failed: {str(yte)}")
+        except: pass
 
-    # 1. Parallel Invidious + Piped Race
     if yt_id:
-        try:
-            async with httpx.AsyncClient(follow_redirects=True, timeout=3.0) as client:
-                inv_tasks = [fetch_invidious_stream(client, inst, yt_id) for inst in INVIDIOUS_INSTANCES]
-                piped_tasks = [fetch_piped_stream(client, inst, yt_id) for inst in PIPED_INSTANCES]
-                
-                tasks = inv_tasks + piped_tasks
-                random.shuffle(tasks) # Avoid overloading first ones
-                
-                found_res = None
-                for completed_task in asyncio.as_completed(tasks):
-                    res = await completed_task
-                    if res and isinstance(res, dict):
-                        # Duration Guard
-                        if title and artist and duration_total:
-                            if not is_duration_match(duration_total, res.get('duration')):
-                                continue
-                        
-                        found_res = res
-                        break
-                
-                if found_res and isinstance(found_res, dict):
-                    found_res['thumbnail'] = proxy_thumbnail(found_res.get('thumbnail'), base_url)
-                    logger.info(f"SUCCESS: {found_res.get('source')}")
-                    return found_res
-        except Exception as race_e:
-            logger.warning(f"Race error: {str(race_e)}")
-
-    # 1.5 Lavalink Metadata/Stream Check
-    if yt_id:
-        try:
-            async with httpx.AsyncClient(timeout=3.0) as client:
-                for node in LAVALINK_NODES:
-                    res = await fetch_lavalink_stream(client, node, yt_id)
-                    if res:
-                        # If Lavalink found it, we can use the metadata and proceed to other fallbacks for stream_url
-                        # if the node doesn't provide a direct stream_url in REST response
-                        logger.info(f"Lavalink confirmed track: {res['title']}")
-                        # We still need a stream_url, so we continue to SoundCloud/Pytubefix if needed
-                        break
-        except Exception as l_e:
-            logger.warning(f"Lavalink check failed: {str(l_e)}")
-
-    # 4. Ultimate Fallback: yt-dlp
-    if yt_id:
-        try:
-            # Clear cache to avoid temporary blocks
-            with yt_dlp.YoutubeDL({**YDL_OPTIONS, 'cookiefile': None}) as ydl:
-                info = ydl.extract_info(f"https://www.youtube.com/watch?v={yt_id}", download=False)
-                return {
-                    'stream_url': info.get('url'),
-                    'title': info.get('title'),
-                    'thumbnail': proxy_thumbnail(info.get('thumbnail'), base_url),
-                    'artist': info.get('uploader'),
-                    'duration': info.get('duration'),
-                    'source': 'yt-dlp'
+        stream_info = await extractor.get_audio_stream(yt_id)
+        if stream_info:
+            return StreamingResponse(
+                proxy_stream_iter(stream_info['url']),
+                media_type="audio/mpeg",
+                headers={
+                    "X-Stream-Source": stream_info['method'],
+                    "X-Bitrate": str(stream_info['bitrate'])
                 }
-        except Exception: pass
+            )
 
-    # 3. Fallback: SoundCloud HLS (Safety Net)
-    logger.info("Falling back to SoundCloud HLS")
+    raise HTTPException(status_code=503, detail="No robust stream available")
+
+@app.get("/warmup")
+async def warmup(ids: str = Query(...)):
+    """Pre-extract multiple IDs to warm up the cache."""
+    id_list = ids.split(',')
+    warmed = []
+    
+    async def task(vid):
+        try:
+            res = await extractor.get_audio_stream(vid)
+            if res: warmed.append(vid)
+        except: pass
+
+    # Run up to 5 warmups in parallel to avoid overwhelming
+    chunks = [id_list[i:i + 5] for i in range(0, len(id_list), 5)]
+    for chunk in chunks:
+        await asyncio.gather(*(task(vid) for vid in chunk))
+    
+    return {"warmed": warmed, "count": len(warmed)}
+
+@app.get("/stream/health/{video_id}")
+async def check_stream_health(video_id: str):
+    """Check if a song is playable."""
+    start_time = time.time()
     try:
-        search_query = f"{title} {artist}" if title and artist else title or "song"
-        global SC_CID_CACHE
-        cid = SC_CID_CACHE.get("cid")
-        expiry = float(SC_CID_CACHE.get("expiry", 0.0))
-        if not cid or time.time() > expiry:
-            rsc = requests.get('https://soundcloud.com', headers={'User-Agent': 'Mozilla/5.0'}, timeout=5)
-            js_matches = re.findall(r'src=\"(https://a-v2\.sndcdn\.com/assets/[^\"]+\.js)\"', rsc.text)
-            for js_url in js_matches:
-                rj = requests.get(js_url, timeout=5)
-                cid_match = re.search(r'client_id:\"([a-zA-Z0-9]{32})\"', rj.text)
-                if cid_match:
-                    cid = cid_match.group(1)
-                    SC_CID_CACHE = {"cid": cid, "expiry": time.time() + 3600}
-                    break
-        
-        if cid:
-            rss = requests.get(f'https://api-v2.soundcloud.com/search/tracks?q={search_query}&client_id={cid}&limit=1', headers={'User-Agent': 'Mozilla/5.0'}, timeout=5)
-            if rss.status_code == 200:
-                sc_results = rss.json().get('collection', [])
-                if sc_results:
-                    track = sc_results[0]
-                    transcodings = track.get('media', {}).get('transcodings', [])
-                    best = next((t for t in transcodings if t.get('format', {}).get('protocol') == 'hls'), None)
-                    if best:
-                        ru = requests.get(best['url'] + f'?client_id={cid}', headers={'User-Agent': 'Mozilla/5.0'}, timeout=5)
-                        if ru.status_code == 200:
-                            logger.info("SUCCESS: SoundCloud HLS")
-                            thumb = track.get('artwork_url', '').replace('-large', '-t500x500')
-                            if thumb.startswith('http:'): thumb = thumb.replace('http:', 'https:')
-                            return {
-                                'stream_url': ru.json()['url'],
-                                'title': track.get('title'),
-                                'thumbnail': proxy_thumbnail(thumb or 'https://images.unsplash.com/photo-1614613535308-eb5fbd3d2c17?w=500'),
-                                'artist': track.get('user', {}).get('username'),
-                                'duration': track.get('duration') // 1000,
-                                'source': 'SoundCloud'
-                            }
-    except Exception as sce:
-        logger.warning(f"SoundCloud safety fallback failed: {str(sce)}")
+        stream_info = await extractor.get_audio_stream(video_id)
+        return {
+            "available": bool(stream_info),
+            "method": stream_info.get('method') if stream_info else None,
+            "response_time": time.time() - start_time,
+            "bitrate": stream_info.get('bitrate') if stream_info else None
+        }
+    except Exception as e:
+        return {"available": False, "error": str(e)}
 
-    # 5. Fallback: pytubefix (Last resort as it's often throttled)
-    if yt_id:
-        try:
-            from pytubefix import YouTube
-            yt = YouTube(f"https://youtube.com/watch?v={yt_id}")
-            audio_stream = yt.streams.get_audio_only()
-            if audio_stream:
-                logger.info("SUCCESS: pytubefix")
-                return {
-                    'stream_url': audio_stream.url,
-                    'title': yt.title,
-                    'thumbnail': proxy_thumbnail(yt.thumbnail_url),
-                    'artist': yt.author,
-                    'duration': yt.length,
-                    'source': 'pytubefix'
-                }
-        except Exception as py_e:
-            logger.warning(f"pytubefix (last resort) failed: {str(py_e)}")
-
-    raise HTTPException(status_code=503, detail="No stream available")
+@app.get("/test/stream/{video_id}")
+async def test_specific_method(video_id: str, method: str = Query("yt-dlp")):
+    """Internal debugging endpoint."""
+    try:
+        if method == "yt-dlp": res = await extractor._extract_with_ytdlp(video_id)
+        elif method == "piped": res = await extractor._extract_with_piped(video_id)
+        elif method == "invidious": res = await extractor._extract_with_invidious(video_id)
+        elif method == "pytubefix": res = await extractor._extract_with_pytubefix(video_id)
+        else: return {"error": "Invalid method"}
+        return {"available": bool(res), "data": res}
+    except Exception as e:
+        return {"available": False, "error": str(e)}
 
 if __name__ == "__main__":
     import uvicorn

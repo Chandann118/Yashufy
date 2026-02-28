@@ -10,3 +10,4 @@ innertube
 pytubefix
 ytmusicapi
 pycryptodome
+aiohttp
