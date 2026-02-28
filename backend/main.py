@@ -13,6 +13,8 @@ import urllib.parse
 from typing import List, Optional
 from youtubesearchpython import VideosSearch
 from ytmusicapi import YTMusic
+import base64
+from Crypto.Cipher import DES
 
 ytmusic = YTMusic()
 
@@ -31,36 +33,55 @@ INVIDIOUS_INSTANCES = [
     "https://invidious.nerdvpn.de",
     "https://iv.ggtyler.dev",
     "https://inv.zzls.xyz",
-    "https://invidious.projectsegfau.lt",
     "https://iv.datura.network",
     "https://invidious.lunar.icu",
-    "https://invidious.flokinet.to",
-    "https://iv.melmac.space",
-    "https://invidious.privacydev.net",
-    "https://inv.tux.pizza"
+    "https://invidious.flokinet.to"
+]
+
+PIPED_INSTANCES = [
+    "https://pipedapi.kavin.rocks",
+    "https://piped-api.garudalinux.org",
+    "https://api.piped.victr.me",
+    "https://pipedapi.leptons.xyz",
+    "https://piped-api.lunar.icu"
 ]
 
 LAVALINK_NODES = [
-    {"host": "lava.link", "port": 80, "password": "youshallnotpass", "secure": False},
+    {"host": "lavalink-4.oops.moe", "port": 443, "password": "youshallnotpass", "secure": True},
     {"host": "lavalink.lexis.host", "port": 443, "password": "lexishostlavalink", "secure": True},
-    {"host": "lava1.free-lavalink.com", "port": 443, "password": "free-lavalink", "secure": True},
-    {"host": "lava2.free-lavalink.com", "port": 443, "password": "free-lavalink", "secure": True}
+    {"host": "lava1.free-lavalink.com", "port": 443, "password": "free-lavalink", "secure": True}
 ]
+
+def decrypt_saavn_url(enc_url: str):
+    """Decrypt Saavn encrypted media URLs."""
+    try:
+        if not enc_url: return None
+        des = DES.new(b"3834363538333538", DES.MODE_ECB)
+        cipher_text = base64.b64decode(enc_url)
+        dec_text = des.decrypt(cipher_text)
+        url = dec_text.decode('utf-8').split('\x00')[0] # Minimal unpad
+        # Upgrade to 320kbps if possible
+        url = url.replace("_96.mp4", "_320.mp4").replace("_160.mp4", "_320.mp4")
+        return url
+    except Exception as e:
+        logger.warning(f"Saavn decryption error: {str(e)}")
+        return None
 
 def proxy_thumbnail(url: str, base_url: str = None) -> str:
     """Internal proxy router for maximum reliability."""
     if not url or not url.startswith('http'):
         return 'https://images.unsplash.com/photo-1614613535308-eb5fbd3d2c17?w=500'
     
+    # 1. Force HTTPS for base_url if it's Render but comes in as http
+    if base_url and "onrender.com" in base_url and base_url.startswith("http://"):
+        base_url = base_url.replace("http://", "https://")
+    
     encoded_url = urllib.parse.quote(url, safe='')
     
-    # If we have a base_url (our own server), we use our internal proxy as the primary method
     if base_url:
-        # Ensure base_url doesn't end with a slash for clean concatenation
         base = str(base_url).rstrip('/')
         return f"{base}/proxy-image?url={encoded_url}"
     
-    # Fallback to wsrv.nl if base_url is unknown
     return f"https://wsrv.nl/?url={encoded_url}&w=500&h=500&fit=cover&n=-1"
 
 app = FastAPI(title="Vortex Music Backend")
@@ -155,7 +176,8 @@ class SaavnAPI:
             'album': song.get('album'),
             'year': song.get('year'),
             'language': song.get('language'),
-            'url': song.get('perma_url')
+            'url': song.get('perma_url'),
+            'enc_url': song.get('encrypted_media_url')
         }
 
     async def search(self, query: str, base_url: str = None):
@@ -381,49 +403,59 @@ async def fetch_invidious_stream(client: httpx.AsyncClient, instance: str, video
             audio_formats = [f for f in adaptive_formats if f.get('type', '').startswith('audio/')]
             if audio_formats:
                 best_audio = sorted(audio_formats, key=lambda x: int(x.get('bitrate') or 0), reverse=True)[0]
-                
-                # Fix relative thumbnails
                 thumb = data.get('videoThumbnails', [{}])[0].get('url') if data.get('videoThumbnails') else None
-                if thumb and thumb.startswith('/'):
-                    thumb = f"{instance}{thumb}"
+                if thumb and thumb.startswith('/'): thumb = f"{instance}{thumb}"
                 
                 return {
                     'stream_url': best_audio.get('url'),
                     'title': data.get('title'),
-                    'thumbnail': proxy_thumbnail(thumb),
+                    'thumbnail': thumb, # Raw
                     'artist': data.get('author'),
                     'duration': data.get('lengthSeconds'),
                     'source': f'Invidious ({instance})'
                 }
-    except Exception:
-        pass
+    except: pass
+    return None
+
+async def fetch_piped_stream(client: httpx.AsyncClient, instance: str, video_id: str):
+    """Fetch stream from Piped API."""
+    try:
+        resp = await client.get(f"{instance}/streams/{video_id}", timeout=5.0)
+        if resp.status_code == 200:
+            data = resp.json()
+            audio_streams = data.get('audioStreams', [])
+            if audio_streams:
+                best = sorted(audio_streams, key=lambda x: x.get('bitrate', 0), reverse=True)[0]
+                return {
+                    'stream_url': best.get('url'),
+                    'title': data.get('title'),
+                    'thumbnail': data.get('thumbnailUrl'), # Raw
+                    'artist': data.get('uploader'),
+                    'duration': data.get('duration'),
+                    'source': f'Piped ({instance})'
+                }
+    except: pass
     return None
 
 async def fetch_lavalink_stream(client: httpx.AsyncClient, node: dict, identifier: str):
-    """Fetch stream via Lavalink v4 REST API."""
+    """Fetch track info via Lavalink v4 REST API."""
     try:
         protocol = "https" if node['secure'] else "http"
         base = f"{protocol}://{node['host']}:{node['port']}"
         headers = {"Authorization": node['password']}
-        
-        # Load tracks
         resp = await client.get(f"{base}/v4/loadtracks?identifier={identifier}", headers=headers, timeout=5.0)
         if resp.status_code == 200:
             data = resp.json()
             if data.get('loadType') in ['track', 'search'] and data.get('data'):
                 track_data = data['data'][0] if data['loadType'] == 'search' else data['data']
-                # Note: Lavalink provides info but usually you play via websocket.
-                # However, some nodes might expose stream URLs or we can use this for validation.
-                # For direct streaming, Invidious/SoundCloud are better, but Lavalink helps with metadata.
                 return {
                     'title': track_data['info']['title'],
                     'artist': track_data['info']['author'],
                     'duration': track_data['info']['length'] // 1000,
-                    'thumbnail': proxy_thumbnail(track_data['info'].get('artworkUrl')),
+                    'thumbnail': track_data['info'].get('artworkUrl'), # Raw
                     'source': f"Lavalink ({node['host']})"
                 }
-    except Exception:
-        pass
+    except: pass
     return None
 
 @app.get("/stream")
@@ -432,12 +464,54 @@ async def get_stream(
     id: str = Query(...), 
     title: Optional[str] = Query(None), 
     artist: Optional[str] = Query(None),
-    duration_total: Optional[str] = Query(None)
+    duration_total: Optional[str] = Query(None),
+    enc_url: Optional[str] = Query(None)
 ):
     base_url = str(request.base_url)
+    if "onrender.com" in base_url:
+        base_url = base_url.replace("http://", "https://")
+    
+    # 0. Primary Fix: Direct Saavn Decryption (Extremely reliable)
+    if id.startswith('saavn_') or enc_url:
+        logger.info(f"Using direct Saavn decryption for: {id}")
+        # Try decrypting the enc_url if provided, or fetch it if not
+        secret_url = enc_url
+        if not secret_url:
+            # Fetch song details to get encrypted_media_url
+            try:
+                sid = id.replace('saavn_', '')
+                async with httpx.AsyncClient() as client:
+                    ds = await client.get(f"https://www.jiosaavn.com/api.php?__call=song.getDetails&pids={sid}&_format=json&_marker=0&api_version=4&ctx=web6dot0", timeout=5.0)
+                    if ds.status_code == 200:
+                        s_data = ds.json()
+                        # The response is usually a dict where keys are IDs
+                        song_obj = s_data.get(sid) or list(s_data.values())[0] if s_data else {}
+                        secret_url = song_obj.get('encrypted_media_url')
+            except: pass
+        
+        if secret_url:
+            stream_link = decrypt_saavn_url(secret_url)
+            if stream_link:
+                # Get a thumbnail from YT search as Saavn thumbnails are often tiny or blocked
+                thumb = 'https://images.unsplash.com/photo-1614613535308-eb5fbd3d2c17?w=500'
+                try:
+                    search = VideosSearch(f"{title} {artist}", limit=1)
+                    res = search.result().get('result', [])
+                    if res: thumb = res[0].get('thumbnails', [{}])[0].get('url')
+                except: pass
+                
+                return {
+                    'stream_url': stream_link,
+                    'title': title or "Saavn Track",
+                    'thumbnail': proxy_thumbnail(thumb, base_url),
+                    'artist': artist or "JioSaavn",
+                    'duration': int(duration_total) if duration_total else 0,
+                    'source': 'JioSaavn (Direct)'
+                }
+
     """
     Optimized streaming logic with parallel lookups and caching.
-    Priority: Invidious (Race with 3s timeout) -> SoundCloud (HLS) -> pytubefix -> yt-dlp
+    Priority: Piped/Invidious Race -> SoundCloud (HLS) -> pytubefix -> yt-dlp
     """
     yt_id = id
     
@@ -445,7 +519,6 @@ async def get_stream(
     if (len(id) != 11 or id.startswith('saavn_') or id.startswith('deezer_')) and title and artist:
         logger.info(f"Resolving metadata for: {title} - {artist}")
         try:
-            from ytmusicapi import YTMusic
             ytm = YTMusic()
             search_results = ytm.search(f"{title} {artist}", filter="songs", limit=1)
             if search_results:
@@ -454,17 +527,20 @@ async def get_stream(
         except Exception as yte:
             logger.warning(f"YTMusic resolution failed: {str(yte)}")
 
-    # 1. Parallel Invidious Race
+    # 1. Parallel Invidious + Piped Race
     if yt_id:
         try:
-            # Race multiple Invidious instances with a 2.5s timeout for fast UX
-            async with httpx.AsyncClient(follow_redirects=True, timeout=2.5) as client:
-                tasks = [fetch_invidious_stream(client, inst, yt_id) for inst in INVIDIOUS_INSTANCES]
-                # Race: Wait for first non-None result within a tight window
+            async with httpx.AsyncClient(follow_redirects=True, timeout=3.0) as client:
+                inv_tasks = [fetch_invidious_stream(client, inst, yt_id) for inst in INVIDIOUS_INSTANCES]
+                piped_tasks = [fetch_piped_stream(client, inst, yt_id) for inst in PIPED_INSTANCES]
+                
+                tasks = inv_tasks + piped_tasks
+                random.shuffle(tasks) # Avoid overloading first ones
+                
                 found_res = None
                 for completed_task in asyncio.as_completed(tasks):
                     res = await completed_task
-                    if res:
+                    if res and isinstance(res, dict):
                         # Duration Guard
                         if title and artist and duration_total:
                             if not is_duration_match(duration_total, res.get('duration')):
@@ -473,12 +549,12 @@ async def get_stream(
                         found_res = res
                         break
                 
-                if found_res:
+                if found_res and isinstance(found_res, dict):
                     found_res['thumbnail'] = proxy_thumbnail(found_res.get('thumbnail'), base_url)
-                    logger.info(f"SUCCESS: Invidious")
+                    logger.info(f"SUCCESS: {found_res.get('source')}")
                     return found_res
         except Exception as race_e:
-            logger.warning(f"Invidious race error: {str(race_e)}")
+            logger.warning(f"Race error: {str(race_e)}")
 
     # 1.5 Lavalink Metadata/Stream Check
     if yt_id:
