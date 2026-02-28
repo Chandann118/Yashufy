@@ -41,6 +41,13 @@ def set_cached_stream(video_id: str, data: dict):
         'expiry': time.time() + 1800  # 30 minute cache
     }
 
+def cleanup_cache():
+    """Remove expired entries from the cache."""
+    current_time = time.time()
+    expired_keys = [k for k, v in STREAM_CACHE.items() if v['expiry'] <= current_time]
+    for k in expired_keys:
+        del STREAM_CACHE[k]
+
 INVIDIOUS_INSTANCES = [
     "https://inv.nadeko.net",
     "https://inv.tux.pizza",
@@ -72,10 +79,11 @@ def decrypt_saavn_url(enc_url: str):
     """Decrypt Saavn encrypted media URLs."""
     try:
         if not enc_url: return None
-        des = DES.new(b"3834363538333538", DES.MODE_ECB)
+        # DES key for Saavn is exactly 8 bytes
+        des = DES.new(b"38343635", DES.MODE_ECB) 
         cipher_text = base64.b64decode(enc_url)
         dec_text = des.decrypt(cipher_text)
-        url = dec_text.decode('utf-8').split('\x00')[0] # Minimal unpad
+        url = dec_text.decode('utf-8', errors='ignore').split('\x00')[0]
         # Upgrade to 320kbps if possible
         url = url.replace("_96.mp4", "_320.mp4").replace("_160.mp4", "_320.mp4")
         return url
@@ -111,7 +119,8 @@ app.add_middleware(
 
 @app.get("/health")
 async def health_check():
-    return {"status": "healthy", "ver": "v1.1.0-final-fix"}
+    cleanup_cache()
+    return {"status": "healthy", "ver": "v1.1.0-final-fix", "cache_size": len(STREAM_CACHE)}
 
 @app.get("/version")
 async def get_version():
@@ -328,11 +337,14 @@ async def search(request: Request, q: str = Query(...)):
         results_deezer: List = []
         
         try:
-            results_saavn, results_deezer = await asyncio.gather(
+            # Parallel Search: Saavn + Deezer
+            results = await asyncio.gather(
                 saavn.search(q, base_url),
                 deezer.search(q, base_url),
                 return_exceptions=True
             )
+            results_saavn = results[0] if not isinstance(results[0], Exception) else []
+            results_deezer = results[1] if not isinstance(results[1], Exception) else []
             # Handle potential exceptions from gather
             if isinstance(results_saavn, Exception): results_saavn = []
             if isinstance(results_deezer, Exception): results_deezer = []
@@ -496,16 +508,18 @@ class RobustYouTubeExtractor:
 
 extractor = RobustYouTubeExtractor()
 
-async def proxy_stream_iter(url: str):
-    """Generator to proxy audio bytes."""
-    timeout = aiohttp.ClientTimeout(total=None, connect=10)
+async def proxy_stream_iter(url: str, start_byte: int = 0):
+    """Generator to proxy audio bytes with range support."""
+    timeout = aiohttp.ClientTimeout(total=None, connect=10, sock_read=30)
     async with aiohttp.ClientSession(timeout=timeout) as session:
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Range': 'bytes=0-'
         }
+        if start_byte > 0:
+            headers['Range'] = f'bytes={start_byte}-'
+            
         async with session.get(url, headers=headers) as resp:
-            async for chunk in resp.content.iter_chunked(1024 * 64): # 64KB chunks
+            async for chunk in resp.content.iter_chunked(64 * 1024): # 64KB chunks
                 yield chunk
 
 @app.get("/stream")
@@ -553,12 +567,22 @@ async def get_stream(
     if yt_id:
         stream_info = await extractor.get_audio_stream(yt_id)
         if stream_info:
+            # Handle Range header for scrubbing
+            range_header = request.headers.get('range')
+            start_byte = 0
+            if range_header:
+                try:
+                    start_byte = int(range_header.replace('bytes=', '').split('-')[0])
+                except: pass
+
             return StreamingResponse(
-                proxy_stream_iter(stream_info['url']),
+                proxy_stream_iter(stream_info['url'], start_byte),
+                status_code=206 if range_header else 200,
                 media_type="audio/mpeg",
                 headers={
                     "X-Stream-Source": stream_info['method'],
-                    "X-Bitrate": str(stream_info['bitrate'])
+                    "X-Bitrate": str(stream_info['bitrate']),
+                    "Accept-Ranges": "bytes"
                 }
             )
 
