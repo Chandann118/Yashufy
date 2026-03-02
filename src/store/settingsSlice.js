@@ -1,7 +1,7 @@
 import { createSlice } from '@reduxjs/toolkit';
 
 const initialState = {
-    backendUrl: 'https://yashufy.onrender.com', // Your live Render URL
+    backendUrl: 'https://yashufy.onrender.com', // Updated to latest live instance
     discoveryUrl: '',
 };
 

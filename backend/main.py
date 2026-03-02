@@ -144,17 +144,23 @@ async def proxy_image(url: str = Query(...)):
                 "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
                 "Referer": "https://www.youtube.com/"
             }
+            # Try with GET directly since some sites block HEAD
             resp = await client.get(url, headers=headers)
             if resp.status_code == 200:
                 content_type = resp.headers.get("Content-Type", "image/jpeg")
                 return Response(content=resp.content, media_type=content_type)
             else:
                 logger.warning(f"Image proxy failed for {url} with status {resp.status_code}")
-                # Fallback to a placeholder if source fails
+                # Fallback to a valid placeholder
                 return Response(status_code=302, headers={"Location": "https://images.unsplash.com/photo-1614613535308-eb5fbd3d2c17?w=500"})
     except Exception as e:
         logger.error(f"Image proxy error: {str(e)}")
         return Response(status_code=302, headers={"Location": "https://images.unsplash.com/photo-1614613535308-eb5fbd3d2c17?w=500"})
+
+@app.head("/proxy-image")
+async def proxy_image_head(url: str = Query(...)):
+    """Handle HEAD requests for proxy-image."""
+    return Response(status_code=200)
 
 YDL_OPTIONS = {
     'format': 'bestaudio/best',
