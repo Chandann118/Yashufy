@@ -3,7 +3,7 @@ import { View, Text, TextInput, Pressable, Alert, ScrollView, StyleSheet, Activi
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useDispatch, useSelector } from 'react-redux';
 import { setBackendUrl, setDiscoveryUrl } from '../store/settingsSlice';
-import { Settings, Globe, Save, Zap, ChevronDown, ChevronUp, PlayCircle, CheckCircle2, XCircle } from 'lucide-react-native';
+import { Settings, Globe, Save, Zap, ChevronDown, ChevronUp, PlayCircle, CheckCircle2, XCircle, Bug } from 'lucide-react-native';
 
 const StreamTester = ({ backendUrl }) => {
     const [videoId, setVideoId] = useState('');
