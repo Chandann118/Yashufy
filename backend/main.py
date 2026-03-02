@@ -387,17 +387,18 @@ async def search(request: Request, q: str = Query(...)):
 async def trending(request: Request):
     base_url = str(request.base_url)
     try:
-        # Get Saavn Charts
+        # 1. Try freshest Saavn charts (usually updated daily)
         results = await saavn.get_charts(base_url)
-        if results:
+        if results and len(results) > 5:
             return results
             
-        # YT fallback
-        search_engine = VideosSearch("popular music 2024", limit=10)
+        # 2. Fallback: Specific YT Music search for "2024 hits"
+        search_engine = VideosSearch("popular music 2025 hits india", limit=15)
         yt_results = search_engine.result().get('result', [])
         return [format_search_result(v, base_url) for v in yt_results]
     except Exception as e:
         logger.error(f"Trending Error: {str(e)}")
+        # Ultimate fallback
         return []
 
 @app.get("/home")
@@ -462,10 +463,11 @@ class RobustYouTubeExtractor:
             logger.info(f"Using cached stream for {video_id}")
             return cached
 
-        # Define methods with priority. On Render, Piped/Invidious are often faster than failing yt-dlp.
+        # Define methods with priority.
         methods = [
             (self._extract_with_piped, "Piped"),
             (self._extract_with_invidious, "Invidious"),
+            (self._extract_with_soundcloud, "SoundCloud"),
             (self._extract_with_pytubefix, "pytubefix"),
             (self._extract_with_ytdlp, "yt-dlp")
         ]
@@ -473,8 +475,10 @@ class RobustYouTubeExtractor:
         for method, name in methods:
             try:
                 logger.info(f"Trying extraction method: {name}")
-                # Use a strict timeout for each method to prevent hanging the client
-                result = await asyncio.wait_for(method(video_id), timeout=8.0)
+                # SoundCloud usually needs title/artist if video_id is not a SC slug
+                timeout_val = 6.0 if name == "SoundCloud" else 8.0
+                result = await asyncio.wait_for(method(video_id), timeout=timeout_val)
+                
                 if result:
                     result['method'] = name
                     set_cached_stream(video_id, result)
@@ -515,6 +519,33 @@ class RobustYouTubeExtractor:
                 if audio_formats:
                     best = sorted(audio_formats, key=lambda x: int(x.get('bitrate') or 0), reverse=True)[0]
                     return {'url': best.get('url'), 'bitrate': int(best.get('bitrate', 128)), 'duration': data.get('lengthSeconds')}
+        return None
+
+    async def _get_sc_client_id(self) -> Optional[str]:
+        """Fetch a temporary SoundCloud client ID."""
+        if SC_CID_CACHE["cid"] and SC_CID_CACHE["expiry"] > time.time():
+            return SC_CID_CACHE["cid"]
+        
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                r = await client.get("https://soundcloud.com")
+                if r.status_code == 200:
+                    scripts = re.findall(r'src="([^"]+/assets/[^"]+\.js)"', r.text)
+                    for script_url in reversed(scripts):
+                        sr = await client.get(script_url)
+                        cid_match = re.search(r'client_id:"([a-zA-Z0-9]{32})"', sr.text)
+                        if cid_match:
+                            cid = cid_match.group(1)
+                            SC_CID_CACHE["cid"] = cid
+                            SC_CID_CACHE["expiry"] = time.time() + 3600
+                            return cid
+        except: pass
+        return None
+
+    async def _extract_with_soundcloud(self, video_id: str):
+        """Search SoundCloud for fallback stream."""
+        # This needs title/artist context which is rarely available in get_audio_stream(video_id)
+        # However, for directSC requests or if we enhance the extractor later, we define it.
         return None
 
     async def _extract_with_pytubefix(self, video_id: str):

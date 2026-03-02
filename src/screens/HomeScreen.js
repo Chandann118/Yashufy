@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { View, Text, ScrollView, TouchableOpacity, FlatList, TextInput } from 'react-native';
+import { View, Text, ScrollView, TouchableOpacity, FlatList, TextInput, RefreshControl, StyleSheet, ActivityIndicator } from 'react-native';
 import { Image } from 'expo-image';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Play, Heart, Star, TrendingUp, Zap, Clock, Disc, Search, ArrowRight, Music } from 'lucide-react-native';
@@ -184,7 +184,18 @@ export default function HomeScreen({ navigation }) {
 
     return (
         <SafeAreaView className="flex-1 bg-vortex-obsidian">
-            <ScrollView className="px-6" showsVerticalScrollIndicator={false}>
+            <ScrollView
+                className="px-6"
+                showsVerticalScrollIndicator={false}
+                refreshControl={
+                    <RefreshControl
+                        refreshing={loading && trending.length > 0}
+                        onRefresh={fetchHomeContent}
+                        tintColor="#FF9933"
+                        colors={["#FF9933"]}
+                    />
+                }
+            >
 
                 {/* Header */}
                 <View className="flex-row justify-between items-center mt-8 mb-10">
