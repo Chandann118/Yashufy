@@ -10,6 +10,7 @@ import SearchScreen from '../screens/SearchScreen';
 import LibraryScreen from '../screens/LibraryScreen';
 import ProfileScreen from '../screens/ProfileScreen';
 import PlayerModal from '../screens/PlayerModal';
+import DebugScreen from '../screens/DebugScreen';
 import MiniPlayer from '../components/MiniPlayer';
 
 const Tab = createBottomTabNavigator();
