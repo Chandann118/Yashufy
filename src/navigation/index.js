@@ -66,6 +66,11 @@ export default function RootNavigator() {
                 component={PlayerModal}
                 options={{ presentation: 'modal' }}
             />
+            <Stack.Screen
+                name="Debug"
+                component={DebugScreen}
+                options={{ title: 'Diagnostics' }}
+            />
         </Stack.Navigator>
     );
 }

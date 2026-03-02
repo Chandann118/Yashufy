@@ -711,6 +711,41 @@ async def test_specific_method(video_id: str, method: str = Query("yt-dlp")):
     except Exception as e:
         return {"available": False, "error": str(e)}
 
+@app.get("/test-youtube")
+async def test_youtube_extraction(video_id: str = Query("dQw4w9WgXcQ")):
+    """Diagnostic endpoint to test YouTube extraction across all methods."""
+    start_time = time.time()
+    try:
+        results = {}
+        # Test each method individually for clear diagnostics
+        methods = [
+            (extractor._extract_with_ytdlp, "yt-dlp"),
+            (extractor._extract_with_piped, "piped"),
+            (extractor._extract_with_invidious, "invidious"),
+            (extractor._extract_with_pytubefix, "pytubefix")
+        ]
+        
+        for method_func, name in methods:
+            m_start = time.time()
+            try:
+                res = await method_func(video_id)
+                results[name] = {
+                    "success": bool(res),
+                    "time": time.time() - m_start,
+                    "data": res if res else None
+                }
+            except Exception as e:
+                results[name] = {"success": False, "error": str(e), "time": time.time() - m_start}
+                
+        return {
+            "video_id": video_id,
+            "total_time": time.time() - start_time,
+            "results": results
+        }
+    except Exception as e:
+        logger.error(f"Global extraction test error: {str(e)}")
+        return {"error": str(e), "status": "failed"}
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)

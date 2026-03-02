@@ -288,6 +288,21 @@ export default function ProfileScreen() {
 
                         {/* Stream Tester Card */}
                         <StreamTester backendUrl={settings.backendUrl} />
+
+                        {/* Debug Dashboard Link */}
+                        <Pressable
+                            style={({ pressed }) => [
+                                styles.card,
+                                { backgroundColor: '#1a1a1a', borderColor: '#FF9933', opacity: pressed ? 0.8 : 1 }
+                            ]}
+                            onPress={() => navigation.navigate('Debug')}
+                        >
+                            <View style={styles.cardHeader}>
+                                <Bug size={20} color="#FF9933" />
+                                <Text style={[styles.cardSectionTitle, { color: '#FF9933' }]}>Open Debug Dashboard</Text>
+                            </View>
+                            <Text style={styles.description}>Access real-time system logs and diagnostic tests.</Text>
+                        </Pressable>
                     </>
                 )}
 
