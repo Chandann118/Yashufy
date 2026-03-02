@@ -19,13 +19,15 @@ export default function SearchScreen({ navigation, route }) {
     const [fetchingTrackId, setFetchingTrackId] = useState(null);
     const dispatch = useDispatch();
     const categoryQuery = route.params?.category;
+    const directQuery = route.params?.q;
 
     useEffect(() => {
-        if (categoryQuery) {
-            setQuery(categoryQuery);
-            handleSearch(categoryQuery);
+        const queryToSearch = categoryQuery || directQuery;
+        if (queryToSearch) {
+            setQuery(queryToSearch);
+            handleSearch(queryToSearch);
         }
-    }, [categoryQuery]);
+    }, [categoryQuery, directQuery]);
 
     const handleSearch = async (overrideQuery) => {
         const activeQuery = overrideQuery || query;

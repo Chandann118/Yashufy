@@ -120,9 +120,10 @@ export default function ProfileScreen() {
             const text = await response.text();
             const latestUrl = text.trim();
             if (latestUrl.startsWith('http')) {
-                dispatch(setBackendUrl(latestUrl));
-                setUrl(latestUrl);
-                Alert.alert('Synced!', `Updated to: ${latestUrl}`);
+                const cleanUrl = latestUrl.endsWith('/') ? latestUrl.slice(0, -1) : latestUrl;
+                dispatch(setBackendUrl(cleanUrl));
+                setUrl(cleanUrl);
+                Alert.alert('Synced!', `Updated to: ${cleanUrl}`);
             } else {
                 Alert.alert('Error', 'Invalid URL in discovery file.');
             }
@@ -130,6 +131,32 @@ export default function ProfileScreen() {
             Alert.alert('Sync Failed', 'Could not reach discovery server.');
         } finally {
             setSyncing(false);
+        }
+    };
+
+    const [healthStatus, setHealthStatus] = useState('unknown'); // unknown, ok, error
+    const [checkingHealth, setCheckingHealth] = useState(false);
+
+    const checkHealth = async () => {
+        setCheckingHealth(true);
+        try {
+            const start = Date.now();
+            const res = await fetch(`${settings.backendUrl}/health`, {
+                headers: { 'Bypass-Tunnel-Reminder': 'true' },
+                timeout: 10000
+            });
+            const end = Date.now();
+            if (res.ok) {
+                setHealthStatus('ok');
+                Alert.alert('Backend Healthy', `Responded in ${end - start}ms`);
+            } else {
+                setHealthStatus('error');
+            }
+        } catch (e) {
+            setHealthStatus('error');
+            Alert.alert('Connection Error', 'Backend unreachable. It might be waking up (Render cold-start). Please wait 30s and try again.');
+        } finally {
+            setCheckingHealth(false);
         }
     };
 
@@ -157,6 +184,22 @@ export default function ProfileScreen() {
                     <View style={styles.settingRow}>
                         <Text style={styles.settingLabel}>Audio Quality</Text>
                         <Text style={styles.settingValue}>High (320kbps)</Text>
+                    </View>
+
+                    <View style={styles.settingRow}>
+                        <Text style={styles.settingLabel}>Backend Status</Text>
+                        <Pressable onPress={checkHealth} disabled={checkingHealth}>
+                            {checkingHealth ? (
+                                <ActivityIndicator size="small" color="#FF9933" />
+                            ) : (
+                                <View style={styles.statusBadge}>
+                                    <View style={[styles.statusDot, { backgroundColor: healthStatus === 'ok' ? '#4ADE80' : healthStatus === 'error' ? '#F87171' : '#666' }]} />
+                                    <Text style={[styles.statusText, { color: healthStatus === 'ok' ? '#4ADE80' : healthStatus === 'error' ? '#F87171' : '#666' }]}>
+                                        {healthStatus === 'ok' ? 'Online' : healthStatus === 'error' ? 'Offline' : 'Check Status'}
+                                    </Text>
+                                </View>
+                            )}
+                        </Pressable>
                     </View>
 
                     <View style={styles.settingRow}>

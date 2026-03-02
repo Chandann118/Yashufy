@@ -135,20 +135,26 @@ async def ping():
 async def proxy_image(url: str = Query(...)):
     """Internal image proxy to bypass blocking."""
     try:
+        if not url or not url.startswith('http'):
+            return Response(status_code=302, headers={"Location": "https://images.unsplash.com/photo-1614613535308-eb5fbd3d2c17?w=500"})
+            
         async with httpx.AsyncClient(follow_redirects=True, timeout=10.0) as client:
             headers = {
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, Gecko) Chrome/120.0.0.0 Safari/537.36",
-                "Referer": "https://www.google.com/"
+                "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+                "Referer": "https://www.youtube.com/"
             }
             resp = await client.get(url, headers=headers)
             if resp.status_code == 200:
-                return Response(content=resp.content, media_type=resp.headers.get("Content-Type", "image/jpeg"))
+                content_type = resp.headers.get("Content-Type", "image/jpeg")
+                return Response(content=resp.content, media_type=content_type)
             else:
+                logger.warning(f"Image proxy failed for {url} with status {resp.status_code}")
                 # Fallback to a placeholder if source fails
                 return Response(status_code=302, headers={"Location": "https://images.unsplash.com/photo-1614613535308-eb5fbd3d2c17?w=500"})
     except Exception as e:
         logger.error(f"Image proxy error: {str(e)}")
-        raise HTTPException(status_code=500, detail="Failed to proxy image")
+        return Response(status_code=302, headers={"Location": "https://images.unsplash.com/photo-1614613535308-eb5fbd3d2c17?w=500"})
 
 YDL_OPTIONS = {
     'format': 'bestaudio/best',
@@ -257,10 +263,12 @@ class SaavnAPI:
 saavn = SaavnAPI()
 
 def format_search_result(result, base_url: str = None):
+    thumbnails = result.get('thumbnails', [])
+    thumbnail_url = thumbnails[0].get('url') if thumbnails and isinstance(thumbnails, list) else None
     return {
         'id': result.get('id'),
         'title': result.get('title'),
-        'thumbnail': proxy_thumbnail(result.get('thumbnails', [{}])[0].get('url'), base_url),
+        'thumbnail': proxy_thumbnail(thumbnail_url, base_url),
         'artist': result.get('descriptionSnippet', [{}])[0].get('text') if result.get('descriptionSnippet') else result.get('channel', {}).get('name'),
         'duration': result.get('duration'),
         'url': f"https://www.youtube.com/watch?v={result.get('id')}",
@@ -618,11 +626,12 @@ async def get_stream_info(
                         s_data = ds.json()
                         song_obj = s_data.get(sid) or list(s_data.values())[0] if s_data else {}
                         secret_url = song_obj.get('encrypted_media_url')
+                        thumbnail = song_obj.get('image') or song_obj.get('thumbnail')
+                        duration = int(song_obj.get('duration', 0))
             except: pass
         
         if secret_url:
             stream_url = f"{base_url.rstrip('/')}/stream?id={id}&enc_url={urllib.parse.quote(secret_url)}"
-            # Thumbnail is already proxied in format_song but let's be sure
     
     # YouTube Fallback
     if not stream_url:
@@ -639,9 +648,14 @@ async def get_stream_info(
             if stream_info:
                 stream_url = f"{base_url.rstrip('/')}/stream?id={yt_id}"
                 duration = stream_info.get('duration', 0)
+                thumbnail = f"https://img.youtube.com/vi/{yt_id}/maxresdefault.jpg"
     
     if not stream_url:
         raise HTTPException(status_code=503, detail="No robust stream available")
+
+    # Final polish for thumbnail URL
+    if thumbnail and isinstance(thumbnail, str):
+        thumbnail = thumbnail.replace('150x150', '500x500').replace('50x50', '500x500')
 
     return {
         "stream_url": stream_url,

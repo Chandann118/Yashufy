@@ -59,14 +59,16 @@ const SongCard = ({ title, artist, image, onPress }) => (
 
 const SpotlightCard = ({ artistInfo, loading }) => {
     if (loading) return (
-        <View className="h-56 w-full rounded-3xl bg-vortex-surface animate-pulse mb-8" />
+        <View className="h-56 w-full rounded-3xl bg-vortex-surface mb-8 border border-white/5 items-center justify-center">
+            <Text className="text-vortex-textSecondary text-xs">Loading Spotlight...</Text>
+        </View>
     );
     if (!artistInfo) return null;
 
     return (
         <TouchableOpacity className="mb-10 rounded-3xl overflow-hidden bg-vortex-surface border border-white/5 shadow-2xl">
-            <Image source={{ uri: artistInfo.fanart || artistInfo.banner }} className="w-full h-56 opacity-80" />
-            <View className="p-6 absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black via-black/60 to-transparent">
+            <Image source={{ uri: artistInfo.fanart || artistInfo.banner }} className="w-full h-56 opacity-60" />
+            <View className="p-6 absolute bottom-0 left-0 right-0 bg-black/60">
                 <View className="flex-row items-center mb-2">
                     <View className="px-2 py-0.5 bg-vortex-saffron rounded-md mr-2">
                         <Text className="text-black text-[10px] font-black uppercase">Spotlight</Text>
