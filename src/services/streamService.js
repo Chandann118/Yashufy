@@ -17,7 +17,7 @@ export const fetchStreamWithRetry = async (item, retryAttempt = 0) => {
         const response = await fetch(url, {
             headers: { 'Bypass-Tunnel-Reminder': 'true' }
         });
-        n
+
         // Handle 202 Accepted (Processing/Waking Up)
         if (response.status === 202) {
             console.log(`Backend is processing (202). Retrying in attempt ${retryAttempt + 1}...`);

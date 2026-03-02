@@ -268,8 +268,23 @@ export default function HomeScreen({ navigation }) {
                     ListEmptyComponent={<View className="flex-row">{[1, 2, 3].map(i => <View key={i} className="mr-5 w-40 h-56 bg-vortex-surface rounded-3xl animate-pulse" />)}</View>}
                 />
 
+                {/* Spacer */}
                 <View className="h-40" />
             </ScrollView>
+
+            {/* Global Loading Overlay */}
+            {fetchingTrackId && (
+                <View style={StyleSheet.absoluteFill} className="bg-black/80 items-center justify-center">
+                    <View className="bg-vortex-surface p-8 rounded-3xl border border-white/10 items-center shadow-2xl">
+                        <ActivityIndicator size="large" color="#FF9933" />
+                        <Text className="text-white font-bold mt-4 text-lg">Fetching Stream...</Text>
+                        <Text className="text-vortex-textSecondary text-xs mt-2 text-center">Optimizing extraction for your region</Text>
+                    </View>
+                </View>
+            )}
         </SafeAreaView>
     );
 }
+
+const styles = StyleSheet.create({
+});

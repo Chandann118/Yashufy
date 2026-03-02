@@ -455,31 +455,36 @@ class RobustYouTubeExtractor:
         }
 
     async def get_audio_stream(self, video_id: str) -> Optional[Dict]:
-        """Try multiple methods sequentially with fallback."""
-        methods = [
-            (self._extract_with_ytdlp, "yt-dlp"),
-            (self._extract_with_piped, "Piped"),
-            (self._extract_with_invidious, "Invidious"),
-            (self._extract_with_pytubefix, "pytubefix")
-        ]
-        
+        """Try multiple methods with optimized fallback and timeouts."""
         # Check cache first
         cached = get_cached_stream(video_id)
         if cached:
             logger.info(f"Using cached stream for {video_id}")
             return cached
 
+        # Define methods with priority. On Render, Piped/Invidious are often faster than failing yt-dlp.
+        methods = [
+            (self._extract_with_piped, "Piped"),
+            (self._extract_with_invidious, "Invidious"),
+            (self._extract_with_pytubefix, "pytubefix"),
+            (self._extract_with_ytdlp, "yt-dlp")
+        ]
+        
         for method, name in methods:
             try:
                 logger.info(f"Trying extraction method: {name}")
-                result = await method(video_id)
+                # Use a strict timeout for each method to prevent hanging the client
+                result = await asyncio.wait_for(method(video_id), timeout=8.0)
                 if result:
                     result['method'] = name
                     set_cached_stream(video_id, result)
                     return result
+            except asyncio.TimeoutError:
+                logger.warning(f"Method {name} timed out for {video_id}")
             except Exception as e:
                 logger.warning(f"Method {name} failed: {str(e)}")
                 continue
+        
         return None
 
     async def _extract_with_ytdlp(self, video_id: str):
