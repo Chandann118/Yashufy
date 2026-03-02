@@ -1,7 +1,7 @@
 import { store } from '../store';
 
 /**
- * Service to handle stream URL fetching with retry logic and 202 status handling.
+ * Service to handle stream URL fetching with retry logic and 202 status handling.............
  */
 export const fetchStreamWithRetry = async (item, retryAttempt = 0) => {
     const maxRetries = 5;
@@ -11,13 +11,13 @@ export const fetchStreamWithRetry = async (item, retryAttempt = 0) => {
     if (!backendUrl) throw new Error('Backend URL not configured');
 
     const videoId = item.videoId || item.id;
-    const url = `${backendUrl}/stream?id=${videoId}&title=${encodeURIComponent(item.title)}&artist=${encodeURIComponent(item.artist)}&duration_total=${item.duration || ''}`;
+    const url = `${backendUrl}/stream-info?id=${videoId}&title=${encodeURIComponent(item.title)}&artist=${encodeURIComponent(item.artist)}&duration_total=${item.duration || ''}`;
 
     try {
         const response = await fetch(url, {
             headers: { 'Bypass-Tunnel-Reminder': 'true' }
         });
-
+        n
         // Handle 202 Accepted (Processing/Waking Up)
         if (response.status === 202) {
             console.log(`Backend is processing (202). Retrying in attempt ${retryAttempt + 1}...`);

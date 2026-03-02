@@ -1,8 +1,8 @@
 import React, { useEffect, useState } from 'react';
-import { View, Text, ScrollView, TouchableOpacity, FlatList } from 'react-native';
+import { View, Text, ScrollView, TouchableOpacity, FlatList, TextInput } from 'react-native';
 import { Image } from 'expo-image';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { Play, Heart, Star, TrendingUp, Zap, Clock, Disc } from 'lucide-react-native';
+import { Play, Heart, Star, TrendingUp, Zap, Clock, Disc, Search, ArrowRight, Music } from 'lucide-react-native';
 import { useDispatch, useSelector } from 'react-redux';
 import { setTrack, setPlaying, setQueue, setCurrentIndex } from '../store/playerSlice';
 import { playTrack } from '../services/audioService';
@@ -12,55 +12,71 @@ import { warmupManager } from '../services/warmupService';
 
 const CategoryCard = ({ title, color, onPress }) => (
     <TouchableOpacity
-        className="w-[48%] h-24 rounded-xl p-3 mb-4 overflow-hidden"
+        className="w-[48%] h-24 rounded-2xl p-4 mb-4 overflow-hidden shadow-lg"
         style={{ backgroundColor: color }}
         onPress={onPress}
     >
-        <Text className="text-white font-bold text-lg">{title}</Text>
-        <View className="absolute -bottom-2 -right-2 opacity-20">
-            <Disc size={60} color="white" />
+        <Text className="text-white font-black text-xl">{title}</Text>
+        <View className="absolute -bottom-2 -right-2 opacity-30">
+            <Disc size={70} color="white" />
         </View>
     </TouchableOpacity>
 );
 
-const SectionHeader = ({ title, icon: Icon, color }) => (
-    <View className="flex-row items-center mb-4 mt-6">
-        <Icon size={20} color={color} />
-        <Text className="text-white font-bold text-xl ml-2">{title}</Text>
+const SectionHeader = ({ title, icon: Icon, color, showAll }) => (
+    <View className="flex-row items-center justify-between mb-5 mt-8">
+        <View className="flex-row items-center">
+            <View className="w-8 h-8 rounded-lg items-center justify-center mr-3" style={{ backgroundColor: `${color}20` }}>
+                <Icon size={18} color={color} />
+            </View>
+            <Text className="text-white font-bold text-2xl tracking-tight">{title}</Text>
+        </View>
+        {showAll && (
+            <TouchableOpacity>
+                <Text className="text-vortex-saffron font-bold text-xs uppercase tracking-widest">See All</Text>
+            </TouchableOpacity>
+        )}
     </View>
 );
 
 const SongCard = ({ title, artist, image, onPress }) => (
-    <TouchableOpacity className="mr-4 w-36" onPress={onPress}>
-        <View className="w-36 h-36 bg-vortex-surface rounded-xl overflow-hidden mb-2">
+    <TouchableOpacity className="mr-5 w-40" onPress={onPress}>
+        <View className="w-40 h-40 bg-vortex-surface rounded-3xl overflow-hidden mb-3 shadow-2xl border border-white/5">
             <Image
                 source={{ uri: getThumbnailUrl({ thumbnail: image, title, artist }) }}
                 className="w-full h-full"
                 contentFit="cover"
-                transition={200}
+                transition={300}
             />
+            <View className="absolute bottom-2 right-2 w-10 h-10 bg-vortex-saffron rounded-full items-center justify-center shadow-lg">
+                <Play size={18} color="black" fill="black" />
+            </View>
         </View>
-        <Text className="text-white font-semibold" numberOfLines={1}>{title}</Text>
-        <Text className="text-vortex-textSecondary text-xs" numberOfLines={1}>{artist}</Text>
+        <Text className="text-white font-bold text-sm px-1" numberOfLines={1}>{title}</Text>
+        <Text className="text-vortex-textSecondary text-xs px-1 mt-0.5" numberOfLines={1}>{artist}</Text>
     </TouchableOpacity>
 );
 
 const SpotlightCard = ({ artistInfo, loading }) => {
-    if (loading) return null;
+    if (loading) return (
+        <View className="h-56 w-full rounded-3xl bg-vortex-surface animate-pulse mb-8" />
+    );
     if (!artistInfo) return null;
 
     return (
-        <View className="mb-8 rounded-2xl overflow-hidden bg-vortex-surface border border-vortex-surface">
-            <Image source={{ uri: artistInfo.fanart || artistInfo.banner }} className="w-full h-48 opacity-70" />
-            <View className="p-4 absolute bottom-0 left-0 right-0 bg-black/40">
-                <View className="flex-row items-center mb-1">
-                    <Star size={16} color="#FF9933" />
-                    <Text className="text-vortex-saffron text-xs font-bold ml-1 uppercase tracking-tighter">Artist Spotlight</Text>
+        <TouchableOpacity className="mb-10 rounded-3xl overflow-hidden bg-vortex-surface border border-white/5 shadow-2xl">
+            <Image source={{ uri: artistInfo.fanart || artistInfo.banner }} className="w-full h-56 opacity-80" />
+            <View className="p-6 absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black via-black/60 to-transparent">
+                <View className="flex-row items-center mb-2">
+                    <View className="px-2 py-0.5 bg-vortex-saffron rounded-md mr-2">
+                        <Text className="text-black text-[10px] font-black uppercase">Spotlight</Text>
+                    </View>
+                    <Text className="text-vortex-saffron text-xs font-bold tracking-widest uppercase">Artist of the week</Text>
                 </View>
-                <Text className="text-white text-2xl font-black mb-1">{artistInfo.artistName}</Text>
-                <Text className="text-vortex-textSecondary text-xs leading-4" numberOfLines={2}>{artistInfo.bio}</Text>
+                <Text className="text-white text-3xl font-black mb-2 tracking-tighter">{artistInfo.artistName}</Text>
+                <Text className="text-vortex-textSecondary text-xs leading-4 opacity-90" numberOfLines={2}>{artistInfo.bio}</Text>
             </View>
-        </View>
+        </TouchableOpacity>
     );
 };
 
@@ -71,6 +87,7 @@ export default function HomeScreen({ navigation }) {
     const [spotlight, setSpotlight] = useState(null);
     const [loading, setLoading] = useState(true);
     const [fetchingTrackId, setFetchingTrackId] = useState(null);
+    const [directUrl, setDirectUrl] = useState('');
 
     const backendUrl = useSelector(state => state.settings.backendUrl);
     const dispatch = useDispatch();
@@ -93,7 +110,6 @@ export default function HomeScreen({ navigation }) {
             setTrending(data.trending || []);
             setRecent(data.recently_played || []);
 
-            // Fetch spotlight for a random trending artist or a fallback
             const artistToSpotlight = data.trending?.[0]?.artist || "Arijit Singh";
             const artistRes = await fetch(`${backendUrl}/artist/${encodeURIComponent(artistToSpotlight)}`, {
                 headers: { 'Bypass-Tunnel-Reminder': 'true' }
@@ -113,7 +129,7 @@ export default function HomeScreen({ navigation }) {
     };
 
     const handlePlay = async (item, index, customQueue) => {
-        if (fetchingTrackId) return; // Prevent multiple clicks
+        if (fetchingTrackId) return;
 
         try {
             setFetchingTrackId(item.id);
@@ -123,10 +139,10 @@ export default function HomeScreen({ navigation }) {
             const streamData = await fetchStreamWithRetry(item);
 
             const track = {
-                id: item.id,
+                id: item.id || streamData.id,
                 url: streamData.stream_url,
-                title: item.title,
-                artist: item.artist,
+                title: item.title || "Direct Stream",
+                artist: item.artist || "Unknown Artist",
                 artwork: getThumbnailUrl({ ...item, thumbnail: streamData.thumbnail }),
                 duration: item.duration || streamData.duration,
             };
@@ -145,10 +161,23 @@ export default function HomeScreen({ navigation }) {
             navigation.navigate('Player');
         } catch (error) {
             console.error('Playback error:', error);
-            alert("Streaming service is slow or busy. Please try another song.");
+            alert("This song is currently unavailable. Trying to wake up services...");
         } finally {
             setFetchingTrackId(null);
         }
+    };
+
+    const handleDirectStream = () => {
+        if (!directUrl.trim()) return;
+
+        // If it's a URL, handle as direct stream, else search
+        if (directUrl.includes('youtube.com') || directUrl.includes('youtu.be') || directUrl.length === 11) {
+            const videoId = directUrl.includes('v=') ? directUrl.split('v=')[1].split('&')[0] : (directUrl.includes('be/') ? directUrl.split('be/')[1] : directUrl);
+            handlePlay({ id: videoId, title: "Stream Link", artist: "External Source" });
+        } else {
+            navigation.navigate('Search', { q: directUrl });
+        }
+        setDirectUrl('');
     };
 
     return (
@@ -156,28 +185,51 @@ export default function HomeScreen({ navigation }) {
             <ScrollView className="px-6" showsVerticalScrollIndicator={false}>
 
                 {/* Header */}
-                <View className="flex-row justify-between items-center mt-6 mb-8">
+                <View className="flex-row justify-between items-center mt-8 mb-10">
                     <View>
-                        <Text className="text-vortex-textSecondary text-sm font-medium uppercase tracking-widest">{greeting}</Text>
-                        <Text className="text-white text-3xl font-extrabold">नमस्ते, <Text className="text-vortex-saffron">Vortex</Text></Text>
+                        <Text className="text-vortex-textSecondary text-xs font-bold uppercase tracking-[4px] mb-1">{greeting}</Text>
+                        <View className="flex-row items-center">
+                            <Text className="text-white text-4xl font-black italic">Yashu</Text>
+                            <Text className="text-vortex-saffron text-4xl font-black ml-1">fy</Text>
+                        </View>
                     </View>
-                    <TouchableOpacity className="w-12 h-12 rounded-full border border-vortex-saffron items-center justify-center overflow-hidden">
+                    <TouchableOpacity className="w-14 h-14 rounded-2xl bg-vortex-surface border border-white/10 items-center justify-center shadow-xl">
                         <Image
                             source={require('../../assets/icon.png')}
-                            className="w-full h-full"
+                            className="w-10 h-10"
                             contentFit="contain"
                         />
                     </TouchableOpacity>
                 </View>
 
+                {/* Direct Stream / Instant Search */}
+                <View className="bg-vortex-surface p-1 rounded-2xl flex-row items-center mb-10 border border-white/5 shadow-2xl">
+                    <View className="pl-4">
+                        <Music size={20} color="#FF9933" />
+                    </View>
+                    <TextInput
+                        className="flex-1 text-white font-bold h-12 px-3 text-sm"
+                        placeholder="Paste YT link or search any song..."
+                        placeholderTextColor="#666"
+                        value={directUrl}
+                        onChangeText={setDirectUrl}
+                    />
+                    <TouchableOpacity
+                        className="bg-vortex-saffron w-10 h-10 rounded-xl items-center justify-center mr-1"
+                        onPress={handleDirectStream}
+                    >
+                        <ArrowRight size={20} color="black" />
+                    </TouchableOpacity>
+                </View>
+
                 <SpotlightCard artistInfo={spotlight} loading={loading} />
 
-                <SectionHeader title="Recently Played" icon={Clock} color="#FF9933" />
+                <SectionHeader title="Jump Back In" icon={Clock} color="#FF9933" showAll={recent.length > 5} />
                 <FlatList
                     horizontal
                     showsHorizontalScrollIndicator={false}
                     data={recent}
-                    keyExtractor={(item) => item.id}
+                    keyExtractor={(item) => `recent-${item.id}`}
                     renderItem={({ item, index }) => (
                         <SongCard
                             title={item.title}
@@ -186,10 +238,9 @@ export default function HomeScreen({ navigation }) {
                             onPress={() => handlePlay(item, index, recent)}
                         />
                     )}
-                    ListEmptyComponent={<Text className="text-vortex-textSecondary ml-4">No recent songs</Text>}
+                    ListEmptyComponent={<Text className="text-vortex-textSecondary ml-4 italic">Your listening history starts here...</Text>}
                 />
 
-                {/* Categories / Moods */}
                 <SectionHeader title="Moods & Genres" icon={Star} color="#0070FF" />
                 <View className="flex-row flex-wrap justify-between">
                     <CategoryCard title="Chill" color="#1E3A8A" onPress={() => navigation.navigate('Search', { category: 'Chill' })} />
@@ -198,13 +249,12 @@ export default function HomeScreen({ navigation }) {
                     <CategoryCard title="Party" color="#4C1D95" onPress={() => navigation.navigate('Search', { category: 'Party' })} />
                 </View>
 
-                {/* Trending */}
-                <SectionHeader title="Trending Hits" icon={TrendingUp} color="#FF9933" />
+                <SectionHeader title="Trending Hits" icon={TrendingUp} color="#FF9933" showAll={true} />
                 <FlatList
                     horizontal
                     showsHorizontalScrollIndicator={false}
                     data={trending}
-                    keyExtractor={(item) => item.id}
+                    keyExtractor={(item) => `trending-${item.id}`}
                     renderItem={({ item, index }) => (
                         <SongCard
                             title={item.title}
@@ -213,7 +263,7 @@ export default function HomeScreen({ navigation }) {
                             onPress={() => handlePlay(item, index, trending)}
                         />
                     )}
-                    ListEmptyComponent={<Text className="text-vortex-textSecondary ml-4">Loading trending...</Text>}
+                    ListEmptyComponent={<View className="flex-row">{[1, 2, 3].map(i => <View key={i} className="mr-5 w-40 h-56 bg-vortex-surface rounded-3xl animate-pulse" />)}</View>}
                 />
 
                 <View className="h-40" />

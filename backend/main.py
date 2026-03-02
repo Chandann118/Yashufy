@@ -588,6 +588,68 @@ async def get_stream(
 
     raise HTTPException(status_code=503, detail="No robust stream available")
 
+@app.get("/stream-info")
+async def get_stream_info(
+    request: Request,
+    id: str = Query(...), 
+    title: Optional[str] = Query(None), 
+    artist: Optional[str] = Query(None),
+    duration_total: Optional[str] = Query(None),
+    enc_url: Optional[str] = Query(None)
+):
+    """Metadata-only endpoint for the frontend to get the actual stream URL and info."""
+    base_url = str(request.base_url)
+    if "onrender.com" in base_url:
+        base_url = base_url.replace("http://", "https://")
+    
+    stream_url = None
+    thumbnail = None
+    duration = 0
+    
+    # JioSaavn Direct 
+    if id.startswith('saavn_') or enc_url:
+        secret_url = enc_url
+        if not secret_url:
+            try:
+                sid = id.replace('saavn_', '')
+                async with httpx.AsyncClient() as client:
+                    ds = await client.get(f"https://www.jiosaavn.com/api.php?__call=song.getDetails&pids={sid}&_format=json&_marker=0&api_version=4&ctx=web6dot0", timeout=5.0)
+                    if ds.status_code == 200:
+                        s_data = ds.json()
+                        song_obj = s_data.get(sid) or list(s_data.values())[0] if s_data else {}
+                        secret_url = song_obj.get('encrypted_media_url')
+            except: pass
+        
+        if secret_url:
+            stream_url = f"{base_url.rstrip('/')}/stream?id={id}&enc_url={urllib.parse.quote(secret_url)}"
+            # Thumbnail is already proxied in format_song but let's be sure
+    
+    # YouTube Fallback
+    if not stream_url:
+        yt_id = id
+        if (len(id) != 11 or id.startswith('saavn_')) and title and artist:
+            try:
+                search_results = ytmusic.search(f"{title} {artist}", filter="songs", limit=1)
+                if search_results:
+                    yt_id = search_results[0].get('videoId')
+            except: pass
+
+        if yt_id:
+            stream_info = await extractor.get_audio_stream(yt_id)
+            if stream_info:
+                stream_url = f"{base_url.rstrip('/')}/stream?id={yt_id}"
+                duration = stream_info.get('duration', 0)
+    
+    if not stream_url:
+        raise HTTPException(status_code=503, detail="No robust stream available")
+
+    return {
+        "stream_url": stream_url,
+        "thumbnail": proxy_thumbnail(thumbnail, base_url) if thumbnail else None,
+        "duration": duration * 1000 if duration else None, # frontend expects millis
+        "id": id
+    }
+
 @app.get("/warmup")
 async def warmup(ids: str = Query(...)):
     """Pre-extract multiple IDs to warm up the cache."""
